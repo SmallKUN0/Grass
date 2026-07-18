@@ -1,0 +1,856 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>3D 草地世界</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            touch-action: none;
+        }
+        html, body {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background: #000;
+        }
+        #canvas-container {
+            width: 100%;
+            height: 100%;
+            position: fixed;
+            top: 0;
+            left: 0;
+        }
+        canvas {
+            display: block;
+        }
+        /* 左摇杆 */
+        #joystick-zone {
+            position: fixed;
+            left: 20px;
+            bottom: 20px;
+            width: 140px;
+            height: 140px;
+            z-index: 100;
+            pointer-events: auto;
+        }
+        #joystick-base {
+            position: absolute;
+            width: 120px;
+            height: 120px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.15);
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+        }
+        #joystick-knob {
+            position: absolute;
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.5);
+            border: 2px solid rgba(255, 255, 255, 0.8);
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            transition: none;
+        }
+        /* 奔跑按钮 */
+        #sprint-btn {
+            position: fixed;
+            right: 20px;
+            bottom: 20px;
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.15);
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            color: rgba(255, 255, 255, 0.8);
+            font-size: 12px;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+            pointer-events: auto;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+        #sprint-btn.active {
+            background: rgba(100, 200, 255, 0.4);
+            border-color: rgba(100, 200, 255, 0.8);
+        }
+        /* 提示文字 */
+        #hint {
+            position: fixed;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: rgba(255, 255, 255, 0.6);
+            font-size: 12px;
+            z-index: 100;
+            pointer-events: none;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div id="canvas-container"></div>
+    <div id="hint">WASD/摇杆移动 | 滑动转视角 | LShift/按钮奔跑</div>
+    
+    <div id="joystick-zone">
+        <div id="joystick-base"></div>
+        <div id="joystick-knob"></div>
+    </div>
+    
+    <div id="sprint-btn">LShift</div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+        }
+    }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+
+        // ==================== 配置 ====================
+        const CONFIG = {
+            chunkSize: 25,
+            renderRadius: 2, // r=2, 即 5x5 区块
+            moveSpeed: 8,
+            sprintMultiplier: 2.0, // 加速100%
+            playerHeight: 2,
+            grassDensity: 900, // 每区块草数量
+            grassHeightMin: 0.08, // 角色高度的4%
+            grassHeightMax: 0.4,  // 角色高度的20%
+            terrainHeightScale: 3,
+            terrainFreq: 0.05,
+        };
+
+        // ==================== Simplex Noise ====================
+        class SimplexNoise {
+            constructor() {
+                this.grad3 = [
+                    [1,1,0],[-1,1,0],[1,-1,0],[-1,-1,0],
+                    [1,0,1],[-1,0,1],[1,0,-1],[-1,0,-1],
+                    [0,1,1],[0,-1,1],[0,1,-1],[0,-1,-1]
+                ];
+                this.p = [];
+                for (let i = 0; i < 256; i++) this.p[i] = Math.floor(Math.random() * 256);
+                this.perm = [];
+                for (let i = 0; i < 512; i++) this.perm[i] = this.p[i & 255];
+            }
+            dot(g, x, y) { return g[0]*x + g[1]*y; }
+            noise2D(xin, yin) {
+                let n0, n1, n2;
+                const F2 = 0.5 * (Math.sqrt(3) - 1);
+                const s = (xin + yin) * F2;
+                const i = Math.floor(xin + s);
+                const j = Math.floor(yin + s);
+                const G2 = (3 - Math.sqrt(3)) / 6;
+                const t = (i + j) * G2;
+                const X0 = i - t;
+                const Y0 = j - t;
+                const x0 = xin - X0;
+                const y0 = yin - Y0;
+                let i1, j1;
+                if (x0 > y0) { i1 = 1; j1 = 0; } else { i1 = 0; j1 = 1; }
+                const x1 = x0 - i1 + G2;
+                const y1 = y0 - j1 + G2;
+                const x2 = x0 - 1 + 2 * G2;
+                const y2 = y0 - 1 + 2 * G2;
+                const ii = i & 255;
+                const jj = j & 255;
+                const gi0 = this.perm[ii + this.perm[jj]] % 12;
+                const gi1 = this.perm[ii + i1 + this.perm[jj + j1]] % 12;
+                const gi2 = this.perm[ii + 1 + this.perm[jj + 1]] % 12;
+                let t0 = 0.5 - x0*x0 - y0*y0;
+                if (t0 < 0) n0 = 0; else { t0 *= t0; n0 = t0 * t0 * this.dot(this.grad3[gi0], x0, y0); }
+                let t1 = 0.5 - x1*x1 - y1*y1;
+                if (t1 < 0) n1 = 0; else { t1 *= t1; n1 = t1 * t1 * this.dot(this.grad3[gi1], x1, y1); }
+                let t2 = 0.5 - x2*x2 - y2*y2;
+                if (t2 < 0) n2 = 0; else { t2 *= t2; n2 = t2 * t2 * this.dot(this.grad3[gi2], x2, y2); }
+                return 70 * (n0 + n1 + n2);
+            }
+        }
+        const noise = new SimplexNoise();
+
+        // ==================== 场景初始化 ====================
+        const container = document.getElementById('canvas-container');
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x87CEEB);
+        scene.fog = new THREE.Fog(0x87CEEB, 30, 90);
+
+        const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 200);
+        camera.position.set(0, CONFIG.playerHeight, 0);
+
+        const renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.shadowMap.enabled = true;
+        renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+        container.appendChild(renderer.domElement);
+
+        // 光照
+        const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+        scene.add(ambientLight);
+
+        const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+        dirLight.position.set(50, 80, 30);
+        dirLight.castShadow = true;
+        dirLight.shadow.camera.left = -60;
+        dirLight.shadow.camera.right = 60;
+        dirLight.shadow.camera.top = 60;
+        dirLight.shadow.camera.bottom = -60;
+        dirLight.shadow.mapSize.width = 2048;
+        dirLight.shadow.mapSize.height = 2048;
+        scene.add(dirLight);
+
+        // ==================== 地形高度函数 ====================
+        function getTerrainHeight(x, z) {
+            let h = noise.noise2D(x * CONFIG.terrainFreq, z * CONFIG.terrainFreq);
+            h += 0.5 * noise.noise2D(x * CONFIG.terrainFreq * 2, z * CONFIG.terrainFreq * 2);
+            h += 0.25 * noise.noise2D(x * CONFIG.terrainFreq * 4, z * CONFIG.terrainFreq * 4);
+            return h * CONFIG.terrainHeightScale;
+        }
+
+        // ==================== 地面纹理 ====================
+        const textureLoader = new THREE.TextureLoader();
+        let groundTexture;
+        try {
+            groundTexture = textureLoader.load('Grass.png');
+            groundTexture.wrapS = THREE.RepeatWrapping;
+            groundTexture.wrapT = THREE.RepeatWrapping;
+            groundTexture.repeat.set(40, 40);
+        } catch (e) {
+            // 如果加载失败，使用程序生成纹理
+            const canvas = document.createElement('canvas');
+            canvas.width = 256;
+            canvas.height = 256;
+            const ctx = canvas.getContext('2d');
+            ctx.fillStyle = '#4a7c2a';
+            ctx.fillRect(0, 0, 256, 256);
+            for (let i = 0; i < 5000; i++) {
+                ctx.fillStyle = Math.random() > 0.5 ? '#5a8c3a' : '#3a6c1a';
+                ctx.fillRect(Math.random() * 256, Math.random() * 256, 2, 2);
+            }
+            groundTexture = new THREE.CanvasTexture(canvas);
+            groundTexture.wrapS = THREE.RepeatWrapping;
+            groundTexture.wrapT = THREE.RepeatWrapping;
+            groundTexture.repeat.set(40, 40);
+        }
+
+        // ==================== 区块地形系统 ====================
+        const chunkMeshes = new Map();
+        const chunkSize = CONFIG.chunkSize;
+        const segments = 16; // 每区块分段数
+
+        function getChunkKey(cx, cz) {
+            return cx + ',' + cz;
+        }
+
+        function createChunkMesh(cx, cz) {
+            const geometry = new THREE.PlaneGeometry(chunkSize, chunkSize, segments, segments);
+            geometry.rotateX(-Math.PI / 2);
+            
+            const positions = geometry.attributes.position.array;
+            for (let i = 0; i < positions.length; i += 3) {
+                const wx = cx * chunkSize + positions[i];
+                const wz = cz * chunkSize + positions[i + 2];
+                positions[i + 1] = getTerrainHeight(wx, wz);
+            }
+            geometry.computeVertexNormals();
+
+            const material = new THREE.MeshStandardMaterial({
+                map: groundTexture,
+                roughness: 0.9,
+                metalness: 0.0,
+            });
+
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.position.set(cx * chunkSize, 0, cz * chunkSize);
+            mesh.receiveShadow = true;
+            return mesh;
+        }
+
+        function updateChunks(playerX, playerZ) {
+            const pcx = Math.floor(playerX / chunkSize);
+            const pcz = Math.floor(playerZ / chunkSize);
+            const r = CONFIG.renderRadius;
+
+            const needed = new Set();
+            for (let dx = -r; dx <= r; dx++) {
+                for (let dz = -r; dz <= r; dz++) {
+                    needed.add(getChunkKey(pcx + dx, pcz + dz));
+                }
+            }
+
+            // 移除不需要的
+            for (const [key, mesh] of chunkMeshes) {
+                if (!needed.has(key)) {
+                    scene.remove(mesh);
+                    mesh.geometry.dispose();
+                    mesh.material.dispose();
+                    chunkMeshes.delete(key);
+                }
+            }
+
+            // 添加需要的
+            for (const key of needed) {
+                if (!chunkMeshes.has(key)) {
+                    const [cx, cz] = key.split(',').map(Number);
+                    const mesh = createChunkMesh(cx, cz);
+                    scene.add(mesh);
+                    chunkMeshes.set(key, mesh);
+                }
+            }
+        }
+
+        // ==================== 草纹理 (Canvas) ====================
+        function createGrassTexture() {
+            const canvas = document.createElement('canvas');
+            canvas.width = 64;
+            canvas.height = 128;
+            const ctx = canvas.getContext('2d');
+            
+            // 渐变草叶
+            const grad = ctx.createLinearGradient(32, 128, 32, 0);
+            grad.addColorStop(0, '#2d5a1a');
+            grad.addColorStop(0.5, '#4a8c2a');
+            grad.addColorStop(1, '#6ab04a');
+            
+            ctx.fillStyle = grad;
+            ctx.beginPath();
+            ctx.moveTo(32, 128);
+            ctx.quadraticCurveTo(20, 64, 28, 0);
+            ctx.quadraticCurveTo(36, 64, 32, 128);
+            ctx.fill();
+            
+            // 添加细节
+            ctx.strokeStyle = '#5a9c3a';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(32, 128);
+            ctx.quadraticCurveTo(26, 64, 30, 10);
+            ctx.stroke();
+
+            const tex = new THREE.CanvasTexture(canvas);
+            tex.wrapS = THREE.ClampToEdgeWrapping;
+            tex.wrapT = THREE.ClampToEdgeWrapping;
+            return tex;
+        }
+
+        const grassTexture = createGrassTexture();
+
+        // ==================== 草的 InstancedMesh (GPU一次渲染) ====================
+        // 创建一个模板区块的草，然后通过位置偏移映射到其他区块
+        const totalVisibleChunks = (CONFIG.renderRadius * 2 + 1) ** 2;
+        const totalGrassCount = CONFIG.grassDensity * totalVisibleChunks;
+
+        // 草的几何体 - 使用 Billboard (始终面向相机)
+        const grassGeo = new THREE.PlaneGeometry(0.3, 1, 1, 4);
+        grassGeo.translate(0, 0.5, 0); // 底部在原点
+
+        // 自定义Shader材质 - 实现摇摆动画
+        const grassMaterial = new THREE.ShaderMaterial({
+            uniforms: {
+                uTime: { value: 0 },
+                uWindStrength: { value: 0.3 },
+                uTexture: { value: grassTexture },
+                uPlayerPos: { value: new THREE.Vector3() },
+            },
+            vertexShader: `
+                uniform float uTime;
+                uniform float uWindStrength;
+                uniform vec3 uPlayerPos;
+                attribute float aHeight;
+                attribute float aPhase;
+                attribute float aLean;
+                varying vec2 vUv;
+                varying float vHeight;
+
+                void main() {
+                    vUv = uv;
+                    vHeight = aHeight;
+                    
+                    vec3 pos = position;
+                    // 根据高度缩放
+                    pos.y *= aHeight;
+                    
+                    // 世界坐标
+                    vec4 worldPos = instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+                    
+                    // 风摇摆效果 - 基于世界坐标和时间
+                    float wind = sin(uTime * 2.0 + worldPos.x * 0.5 + worldPos.z * 0.3 + aPhase) * uWindStrength;
+                    wind += sin(uTime * 1.5 + worldPos.x * 0.3 + aPhase * 2.0) * uWindStrength * 0.5;
+                    
+                    // 越高的草摇摆越明显
+                    float swayFactor = pos.y / aHeight;
+                    pos.x += wind * swayFactor * swayFactor;
+                    pos.z += wind * swayFactor * swayFactor * 0.3;
+                    
+                    // 倾斜
+                    pos.x += aLean * swayFactor;
+                    
+                    // Billboard - 始终面向相机
+                    vec4 mvPosition = viewMatrix * instanceMatrix * vec4(0.0, 0.0, 0.0, 1.0);
+                    mvPosition.xy += pos.xy;
+                    
+                    gl_Position = projectionMatrix * mvPosition;
+                }
+            `,
+            fragmentShader: `
+                uniform sampler2D uTexture;
+                varying vec2 vUv;
+                varying float vHeight;
+
+                void main() {
+                    vec4 tex = texture2D(uTexture, vUv);
+                    if (tex.a < 0.3) discard;
+                    
+                    // 根据高度微调颜色
+                    float darken = 1.0 - (vHeight - 0.08) / 0.32 * 0.2;
+                    tex.rgb *= darken;
+                    
+                    gl_FragColor = tex;
+                }
+            `,
+            transparent: true,
+            alphaTest: 0.3,
+            side: THREE.DoubleSide,
+            depthWrite: false,
+        });
+
+        const grassMesh = new THREE.InstancedMesh(grassGeo, grassMaterial, totalGrassCount);
+        grassMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+        scene.add(grassMesh);
+
+        // 实例属性
+        const aHeight = new Float32Array(totalGrassCount);
+        const aPhase = new Float32Array(totalGrassCount);
+        const aLean = new Float32Array(totalGrassCount);
+
+        for (let i = 0; i < totalGrassCount; i++) {
+            aHeight[i] = CONFIG.grassHeightMin + Math.random() * (CONFIG.grassHeightMax - CONFIG.grassHeightMin);
+            aPhase[i] = Math.random() * Math.PI * 2;
+            aLean[i] = (Math.random() - 0.5) * 0.2;
+        }
+
+        grassGeo.setAttribute('aHeight', new THREE.InstancedBufferAttribute(aHeight, 1));
+        grassGeo.setAttribute('aPhase', new THREE.InstancedBufferAttribute(aPhase, 1));
+        grassGeo.setAttribute('aLean', new THREE.InstancedBufferAttribute(aLean, 1));
+
+        const dummy = new THREE.Object3D();
+
+        // 伪随机函数（基于世界坐标）
+        function seededRandom(x, z) {
+            let n = Math.sin(x * 12.9898 + z * 78.233) * 43758.5453;
+            return n - Math.floor(n);
+        }
+
+        function updateGrassInstances(playerX, playerZ) {
+            const pcx = Math.floor(playerX / chunkSize);
+            const pcz = Math.floor(playerZ / chunkSize);
+            const r = CONFIG.renderRadius;
+            let idx = 0;
+
+            for (let dx = -r; dx <= r; dx++) {
+                for (let dz = -r; dz <= r; dz++) {
+                    const cx = pcx + dx;
+                    const cz = pcz + dz;
+                    const chunkOriginX = cx * chunkSize;
+                    const chunkOriginZ = cz * chunkSize;
+
+                    // 每区块生成固定密度的草
+                    for (let i = 0; i < CONFIG.grassDensity; i++) {
+                        if (idx >= totalGrassCount) break;
+
+                        // 使用基于世界坐标的确定性随机
+                        const seedX = chunkOriginX + (seededRandom(i * 1.1 + cx * 100, cz * 100) - 0.5) * chunkSize;
+                        const seedZ = chunkOriginZ + (seededRandom(i * 2.3 + cx * 200, cz * 200) - 0.5) * chunkSize;
+                        
+                        // 草存在概率 (70%)
+                        if (seededRandom(seedX * 3.7, seedZ * 5.1) > 0.3) {
+                            const y = getTerrainHeight(seedX, seedZ);
+                            
+                            dummy.position.set(seedX, y, seedZ);
+                            dummy.rotation.y = seededRandom(seedX * 7.1, seedZ * 3.3) * Math.PI * 2;
+                            dummy.scale.set(1, 1, 1);
+                            dummy.updateMatrix();
+                            grassMesh.setMatrixAt(idx, dummy.matrix);
+                            idx++;
+                        }
+                    }
+                }
+            }
+
+            // 隐藏未使用的实例
+            for (let i = idx; i < totalGrassCount; i++) {
+                dummy.position.set(0, -1000, 0);
+                dummy.scale.set(0, 0, 0);
+                dummy.updateMatrix();
+                grassMesh.setMatrixAt(i, dummy.matrix);
+            }
+
+            grassMesh.count = idx;
+            grassMesh.instanceMatrix.needsUpdate = true;
+        }
+
+        // ==================== 输入控制 ====================
+        const input = {
+            forward: 0,   // -1 ~ 1
+            right: 0,     // -1 ~ 1
+            sprint: false,
+            lookDeltaX: 0,
+            lookDeltaY: 0,
+        };
+
+        const keys = {};
+        let yaw = 0;
+        let pitch = 0;
+
+        // 键盘
+        window.addEventListener('keydown', (e) => {
+            keys[e.code] = true;
+            if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
+                input.sprint = true;
+                document.getElementById('sprint-btn').classList.add('active');
+            }
+            // WASD
+            if (e.code === 'KeyW') input.forward = 1;
+            if (e.code === 'KeyS') input.forward = -1;
+            if (e.code === 'KeyA') input.right = -1;
+            if (e.code === 'KeyD') input.right = 1;
+        });
+
+        window.addEventListener('keyup', (e) => {
+            keys[e.code] = false;
+            if (e.code === 'ShiftLeft' || e.code === 'ShiftRight') {
+                input.sprint = false;
+                document.getElementById('sprint-btn').classList.remove('active');
+            }
+            if (e.code === 'KeyW' || e.code === 'KeyS') {
+                if (!keys['KeyW'] && !keys['KeyS']) input.forward = 0;
+                else if (keys['KeyW']) input.forward = 1;
+                else input.forward = -1;
+            }
+            if (e.code === 'KeyA' || e.code === 'KeyD') {
+                if (!keys['KeyA'] && !keys['KeyD']) input.right = 0;
+                else if (keys['KeyA']) input.right = -1;
+                else input.right = 1;
+            }
+        });
+
+        // ==================== 摇杆 ====================
+        const joystickZone = document.getElementById('joystick-zone');
+        const joystickBase = document.getElementById('joystick-base');
+        const joystickKnob = document.getElementById('joystick-knob');
+        let joystickTouchId = null;
+        let joystickCenter = { x: 0, y: 0 };
+        let joystickValue = { x: 0, y: 0 };
+
+        function getTouchPos(touch, elem) {
+            const rect = elem.getBoundingClientRect();
+            return {
+                x: touch.clientX - rect.left - rect.width / 2,
+                y: touch.clientY - rect.top - rect.height / 2
+            };
+        }
+
+        joystickZone.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            if (joystickTouchId !== null) return;
+            const touch = e.changedTouches[0];
+            joystickTouchId = touch.identifier;
+            const rect = joystickZone.getBoundingClientRect();
+            joystickCenter = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+            updateJoystick(touch);
+        }, { passive: false });
+
+        joystickZone.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            for (let i = 0; i < e.changedTouches.length; i++) {
+                if (e.changedTouches[i].identifier === joystickTouchId) {
+                    updateJoystick(e.changedTouches[i]);
+                    break;
+                }
+            }
+        }, { passive: false });
+
+        function endJoystick(e) {
+            for (let i = 0; i < e.changedTouches.length; i++) {
+                if (e.changedTouches[i].identifier === joystickTouchId) {
+                    joystickTouchId = null;
+                    joystickKnob.style.transform = 'translate(-50%, -50%)';
+                    joystickValue = { x: 0, y: 0 };
+                    if (!keys['KeyW'] && !keys['KeyS']) input.forward = 0;
+                    if (!keys['KeyA'] && !keys['KeyD']) input.right = 0;
+                    break;
+                }
+            }
+        }
+
+        joystickZone.addEventListener('touchend', endJoystick);
+        joystickZone.addEventListener('touchcancel', endJoystick);
+
+        function updateJoystick(touch) {
+            const dx = touch.clientX - joystickCenter.x;
+            const dy = touch.clientY - joystickCenter.y;
+            const dist = Math.sqrt(dx * dx + dy * dy);
+            const maxDist = 35;
+            const clampedDist = Math.min(dist, maxDist);
+            const angle = Math.atan2(dy, dx);
+            
+            const kx = Math.cos(angle) * clampedDist;
+            const ky = Math.sin(angle) * clampedDist;
+            joystickKnob.style.transform = `translate(calc(-50% + ${kx}px), calc(-50% + ${ky}px))`;
+            
+            joystickValue.x = (Math.cos(angle) * clampedDist) / maxDist;
+            joystickValue.y = (Math.sin(angle) * clampedDist) / maxDist;
+            
+            // 摇杆控制 (y是前后，x是左右)
+            // 注意：摇杆y向下为正，但3D中向前是-z，所以反转
+            input.forward = -joystickValue.y;
+            input.right = joystickValue.x;
+        }
+
+        // ==================== 奔跑按钮 ====================
+        const sprintBtn = document.getElementById('sprint-btn');
+        let sprintTouchId = null;
+
+        sprintBtn.addEventListener('touchstart', (e) => {
+            e.preventDefault();
+            if (sprintTouchId !== null) return;
+            const touch = e.changedTouches[0];
+            sprintTouchId = touch.identifier;
+            input.sprint = true;
+            sprintBtn.classList.add('active');
+        }, { passive: false });
+
+        function endSprint(e) {
+            for (let i = 0; i < e.changedTouches.length; i++) {
+                if (e.changedTouches[i].identifier === sprintTouchId) {
+                    sprintTouchId = null;
+                    if (!keys['ShiftLeft'] && !keys['ShiftRight']) {
+                        input.sprint = false;
+                        sprintBtn.classList.remove('active');
+                    }
+                    break;
+                }
+            }
+        }
+
+        sprintBtn.addEventListener('touchend', endSprint);
+        sprintBtn.addEventListener('touchcancel', endSprint);
+
+        // 鼠标点击按钮也支持
+        sprintBtn.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            input.sprint = true;
+            sprintBtn.classList.add('active');
+        });
+        sprintBtn.addEventListener('mouseup', (e) => {
+            e.preventDefault();
+            if (!keys['ShiftLeft'] && !keys['ShiftRight']) {
+                input.sprint = false;
+                sprintBtn.classList.remove('active');
+            }
+        });
+        sprintBtn.addEventListener('mouseleave', (e) => {
+            if (!keys['ShiftLeft'] && !keys['ShiftRight']) {
+                input.sprint = false;
+                sprintBtn.classList.remove('active');
+            }
+        });
+
+        // ==================== 视角旋转 (滑动屏幕) ====================
+        let lookTouchId = null;
+        let lastLookX = 0;
+        let lastLookY = 0;
+        const sensitivity = 0.003;
+
+        renderer.domElement.addEventListener('touchstart', (e) => {
+            for (let i = 0; i < e.changedTouches.length; i++) {
+                const touch = e.changedTouches[i];
+                // 检查是否在摇杆或按钮区域
+                const jRect = joystickZone.getBoundingClientRect();
+                const sRect = sprintBtn.getBoundingClientRect();
+                
+                const inJoystick = touch.clientX >= jRect.left - 20 && touch.clientX <= jRect.right + 20 &&
+                                   touch.clientY >= jRect.top - 20 && touch.clientY <= jRect.bottom + 20;
+                const inSprint = touch.clientX >= sRect.left - 10 && touch.clientX <= sRect.right + 10 &&
+                                 touch.clientY >= sRect.top - 10 && touch.clientY <= sRect.bottom + 10;
+                
+                if (!inJoystick && !inSprint && lookTouchId === null) {
+                    lookTouchId = touch.identifier;
+                    lastLookX = touch.clientX;
+                    lastLookY = touch.clientY;
+                }
+            }
+        }, { passive: false });
+
+        renderer.domElement.addEventListener('touchmove', (e) => {
+            e.preventDefault();
+            for (let i = 0; i < e.changedTouches.length; i++) {
+                const touch = e.changedTouches[i];
+                if (touch.identifier === lookTouchId) {
+                    const dx = touch.clientX - lastLookX;
+                    const dy = touch.clientY - lastLookY;
+                    yaw -= dx * sensitivity;
+                    pitch -= dy * sensitivity;
+                    pitch = Math.max(-Math.PI / 2.5, Math.min(Math.PI / 2.5, pitch));
+                    lastLookX = touch.clientX;
+                    lastLookY = touch.clientY;
+                    break;
+                }
+            }
+        }, { passive: false });
+
+        function endLook(e) {
+            for (let i = 0; i < e.changedTouches.length; i++) {
+                if (e.changedTouches[i].identifier === lookTouchId) {
+                    lookTouchId = null;
+                    break;
+                }
+            }
+        }
+
+        renderer.domElement.addEventListener('touchend', endLook);
+        renderer.domElement.addEventListener('touchcancel', endLook);
+
+        // 鼠标拖拽转视角
+        let mouseLookDown = false;
+        renderer.domElement.addEventListener('mousedown', (e) => {
+            // 检查是否在UI上
+            const jRect = joystickZone.getBoundingClientRect();
+            const sRect = sprintBtn.getBoundingClientRect();
+            const inJoystick = e.clientX >= jRect.left && e.clientX <= jRect.right &&
+                               e.clientY >= jRect.top && e.clientY <= jRect.bottom;
+            const inSprint = e.clientX >= sRect.left && e.clientX <= sRect.right &&
+                             e.clientY >= sRect.top && e.clientY <= sRect.bottom;
+            
+            if (!inJoystick && !inSprint && e.button === 0) {
+                mouseLookDown = true;
+                lastLookX = e.clientX;
+                lastLookY = e.clientY;
+            }
+        });
+
+        window.addEventListener('mousemove', (e) => {
+            if (mouseLookDown) {
+                const dx = e.clientX - lastLookX;
+                const dy = e.clientY - lastLookY;
+                yaw -= dx * sensitivity;
+                pitch -= dy * sensitivity;
+                pitch = Math.max(-Math.PI / 2.5, Math.min(Math.PI / 2.5, pitch));
+                lastLookX = e.clientX;
+                lastLookY = e.clientY;
+            }
+        });
+
+        window.addEventListener('mouseup', () => {
+            mouseLookDown = false;
+        });
+
+        // 阻止右键菜单
+        renderer.domElement.addEventListener('contextmenu', (e) => e.preventDefault());
+
+        // ==================== 角色控制器 ====================
+        const player = {
+            x: 0,
+            y: 0,
+            z: 0,
+            vx: 0,
+            vz: 0,
+        };
+
+        const clock = new THREE.Clock();
+        let currentChunkCX = null;
+        let currentChunkCZ = null;
+
+        function updatePlayer(dt) {
+            const speed = CONFIG.moveSpeed * (input.sprint ? CONFIG.sprintMultiplier : 1);
+            
+            // 计算移动方向（基于视角朝向）
+            const forward = input.forward;
+            const right = input.right;
+            
+            if (Math.abs(forward) > 0.01 || Math.abs(right) > 0.01) {
+                // 视角朝前的方向
+                const forwardX = Math.sin(yaw);
+                const forwardZ = Math.cos(yaw);
+                const rightX = Math.sin(yaw + Math.PI / 2);
+                const rightZ = Math.cos(yaw + Math.PI / 2);
+                
+                const moveX = forwardX * forward + rightX * right;
+                const moveZ = forwardZ * forward + rightZ * right;
+                
+                // 归一化
+                const len = Math.sqrt(moveX * moveX + moveZ * moveZ);
+                const nx = len > 0 ? moveX / len : 0;
+                const nz = len > 0 ? moveZ / len : 0;
+                
+                player.x += nx * speed * dt;
+                player.z += nz * speed * dt;
+            }
+            
+            // 地形高度跟随
+            player.y = getTerrainHeight(player.x, player.z) + CONFIG.playerHeight;
+            
+            // 更新相机
+            camera.position.set(player.x, player.y, player.z);
+            const lookTarget = new THREE.Vector3(
+                player.x + Math.sin(yaw) * Math.cos(pitch),
+                player.y + Math.sin(pitch),
+                player.z + Math.cos(yaw) * Math.cos(pitch)
+            );
+            camera.lookAt(lookTarget);
+            
+            // 更新Shader中的玩家位置
+            grassMaterial.uniforms.uPlayerPos.value.set(player.x, player.y, player.z);
+            
+            // 检查是否需要更新区块
+            const pcx = Math.floor(player.x / chunkSize);
+            const pcz = Math.floor(player.z / chunkSize);
+            if (pcx !== currentChunkCX || pcz !== currentChunkCZ) {
+                currentChunkCX = pcx;
+                currentChunkCZ = pcz;
+                updateChunks(player.x, player.z);
+                updateGrassInstances(player.x, player.z);
+            }
+        }
+
+        // ==================== 初始化 ====================
+        updateChunks(0, 0);
+        updateGrassInstances(0, 0);
+        player.y = getTerrainHeight(0, 0) + CONFIG.playerHeight;
+
+        // ==================== 渲染循环 ====================
+        function animate() {
+            requestAnimationFrame(animate);
+            const dt = Math.min(clock.getDelta(), 0.1);
+            
+            grassMaterial.uniforms.uTime.value += dt;
+            updatePlayer(dt);
+            
+            renderer.render(scene, camera);
+        }
+        animate();
+
+        // ==================== 窗口调整 ====================
+        window.addEventListener('resize', () => {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        });
+    </script>
+</body>
+</html>
