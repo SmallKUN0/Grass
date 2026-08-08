@@ -1,0 +1,95 @@
+<!-- ========== index.html ========== -->
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>公共聊天室</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <!-- 登录界面 -->
+    <div id="login-screen" class="screen active">
+        <div class="login-box">
+            <div class="login-header">
+                <div class="logo">💬</div>
+                <h1>公共聊天室</h1>
+                <p>请输入您的信息以进入聊天室</p>
+            </div>
+            <form id="login-form" class="login-form">
+                <div class="input-group">
+                    <label for="username">用户名</label>
+                    <input type="text" id="username" placeholder="请输入用户名" required autocomplete="off">
+                </div>
+                <div class="input-group">
+                    <label for="password">密码</label>
+                    <input type="password" id="password" placeholder="请输入密码（任意密码均可）" required>
+                </div>
+                <button type="submit" class="btn-login">进入聊天室</button>
+            </form>
+            <div class="login-footer">
+                <p>💡 提示：密码可任意填写，数据存储在本地</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- 聊天界面 -->
+    <div id="chat-screen" class="screen">
+        <div class="chat-container">
+            <!-- 侧边栏 -->
+            <aside class="sidebar">
+                <div class="sidebar-header">
+                    <h2>💬 聊天室</h2>
+                    <span class="version">v1.0</span>
+                </div>
+                <div class="user-info">
+                    <div class="avatar" id="current-avatar">👤</div>
+                    <div class="user-details">
+                        <span id="current-username" class="username">访客</span>
+                        <span class="status online">● 在线</span>
+                    </div>
+                </div>
+                <div class="online-users">
+                    <h3>在线用户 (<span id="online-count">1</span>)</h3>
+                    <ul id="users-list" class="users-list">
+                        <li class="user-item active">
+                            <span class="user-avatar">👤</span>
+                            <span class="user-name">你</span>
+                            <span class="user-status online"></span>
+                        </li>
+                    </ul>
+                </div>
+                <div class="sidebar-footer">
+                    <button id="logout-btn" class="btn-logout">退出登录</button>
+                </div>
+            </aside>
+
+            <!-- 主聊天区 -->
+            <main class="chat-main">
+                <header class="chat-header">
+                    <h2># 公共频道</h2>
+                    <div class="header-actions">
+                        <button id="clear-chat" class="btn-icon" title="清空聊天记录">🗑️</button>
+                    </div>
+                </header>
+                
+                <div id="messages-area" class="messages-area">
+                    <div class="system-message">
+                        <span class="sys-time" id="welcome-time"></span>
+                        <span class="sys-text">欢迎进入公共聊天室！开始聊天吧～</span>
+                    </div>
+                </div>
+
+                <div class="input-area">
+                    <div class="input-wrapper">
+                        <input type="text" id="message-input" placeholder="输入消息按回车发送..." autocomplete="off" maxlength="500">
+                        <button id="send-btn" class="btn-send">发送</button>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
