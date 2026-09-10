@@ -1,0 +1,799 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+<title>墓碑 · 3D 场景</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%; overflow: hidden;
+    background: #05070c;
+    -webkit-tap-highlight-color: transparent;
+  }
+  #app { position: fixed; inset: 0; }
+  #app canvas { display: block; touch-action: none; }
+
+  #ghost-text {
+    position: fixed;
+    left: 50%;
+    bottom: max(6vh, 34px);
+    transform: translateX(-50%);
+    white-space: pre;
+    font-family: "STKaiti", "KaiTi", "Songti SC", "SimSun", serif;
+    font-size: clamp(18px, 4.6vw, 46px);
+    font-weight: 700;
+    letter-spacing: 0.22em;
+    color: #eef6ff;
+    text-shadow:
+      0 0 8px rgba(190, 225, 255, 0.95),
+      0 0 24px rgba(120, 180, 255, 0.75),
+      0 0 55px rgba(70, 130, 255, 0.45);
+    pointer-events: none;
+    user-select: none;
+    animation: breathe 3.6s ease-in-out infinite;
+  }
+  @keyframes breathe {
+    0%, 100% { opacity: 0.82; filter: blur(0.2px); }
+    50%      { opacity: 1;    filter: blur(0px); }
+  }
+
+  #hint {
+    position: fixed;
+    left: 12px; top: 12px;
+    font-family: system-ui, sans-serif;
+    font-size: 12px;
+    color: rgba(200, 220, 255, 0.35);
+    pointer-events: none;
+    user-select: none;
+  }
+</style>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+
+<div id="app"></div>
+<div id="ghost-text">李小豪    一路走好</div>
+<div id="hint">拖动旋转 · 滚轮 / 双指缩放</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+/* ============================================================
+   工具函数
+============================================================ */
+const clamp255 = v => (v < 0 ? 0 : v > 255 ? 255 : v);
+const rand = (a, b) => a + Math.random() * (b - a);
+
+function makeCanvas(w, h) {
+  const c = document.createElement('canvas');
+  c.width  = Math.max(2, Math.round(w));
+  c.height = Math.max(2, Math.round(h));
+  return c;
+}
+
+let MAX_ANISO = 1;
+function toTexture(canvas, rx = 1, ry = 1) {
+  const t = new THREE.CanvasTexture(canvas);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(rx, ry);
+  t.anisotropy = MAX_ANISO;
+  t.needsUpdate = true;
+  return t;
+}
+
+/* ============================================================
+   渲染器 / 场景 / 相机
+============================================================ */
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x05070c);
+scene.fog = new THREE.FogExp2(0x05070c, 0.021);
+
+const camera = new THREE.PerspectiveCamera(52, innerWidth / innerHeight, 0.1, 300);
+camera.position.set(0, 3.8, 10.6);
+
+const renderer = new THREE.WebGLRenderer({
+  antialias: true,
+  powerPreference: 'high-performance'
+});
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.12;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.getElementById('app').appendChild(renderer.domElement);
+
+MAX_ANISO = renderer.capabilities.getMaxAnisotropy();
+
+/* ============================================================
+   光照
+============================================================ */
+scene.add(new THREE.HemisphereLight(0x53678c, 0x0b0d0a, 0.85));
+
+const moonLight = new THREE.DirectionalLight(0xa9c6ff, 1.7);
+moonLight.position.set(-7, 14, 9);
+moonLight.castShadow = true;
+moonLight.shadow.mapSize.set(2048, 2048);
+moonLight.shadow.camera.left   = -12;
+moonLight.shadow.camera.right  =  12;
+moonLight.shadow.camera.top    =  12;
+moonLight.shadow.camera.bottom = -12;
+moonLight.shadow.camera.near   = 1;
+moonLight.shadow.camera.far    = 60;
+moonLight.shadow.bias = -0.0009;
+scene.add(moonLight);
+
+// 正面补光（让墓碑文字更清晰）
+const fillLight = new THREE.PointLight(0x86b0ff, 26, 32, 2);
+fillLight.position.set(0, 5.2, 7.5);
+scene.add(fillLight);
+
+// 冷色背光，突出轮廓
+const rimLight = new THREE.PointLight(0x3d6cff, 14, 30, 2);
+rimLight.position.set(-4, 6, -6);
+scene.add(rimLight);
+
+/* ============================================================
+   纹理生成：石头
+============================================================ */
+function createStoneCanvas(w, h, base1 = '#8f918a', base2 = '#5f615c') {
+  const c = makeCanvas(w, h);
+  const ctx = c.getContext('2d');
+
+  // 基础色
+  const bg = ctx.createLinearGradient(0, 0, 0, h);
+  bg.addColorStop(0, base1);
+  bg.addColorStop(0.55, base2);
+  bg.addColorStop(1, '#4c4e49');
+  ctx.fillStyle = bg;
+  ctx.fillRect(0, 0, w, h);
+
+  // 大块色斑
+  for (let i = 0; i < 180; i++) {
+    const x = Math.random() * w;
+    const y = Math.random() * h;
+    const r = rand(20, Math.min(w, h) * 0.42);
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    const dark = Math.random() > 0.5;
+    const a = rand(0.03, 0.10);
+    g.addColorStop(0, dark ? `rgba(28,30,28,${a})` : `rgba(232,234,226,${a})`);
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // 细颗粒噪点
+  const img = ctx.getImageData(0, 0, w, h);
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const n = (Math.random() - 0.5) * 56;
+    d[i]     = clamp255(d[i] + n);
+    d[i + 1] = clamp255(d[i + 1] + n);
+    d[i + 2] = clamp255(d[i + 2] + n);
+  }
+  ctx.putImageData(img, 0, 0);
+
+  // 裂纹
+  ctx.lineCap = 'round';
+  for (let i = 0; i < 14; i++) {
+    let x = Math.random() * w;
+    let y = Math.random() * h;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    ctx.strokeStyle = `rgba(36,38,36,${rand(0.18, 0.42)})`;
+    ctx.lineWidth = rand(0.6, 1.8);
+    const segs = Math.round(rand(4, 12));
+    for (let s = 0; s < segs; s++) {
+      x += (Math.random() - 0.5) * 70;
+      y += (Math.random() - 0.5) * 70;
+      ctx.lineTo(x, y);
+    }
+    ctx.stroke();
+  }
+
+  // 苔痕
+  for (let i = 0; i < 60; i++) {
+    const x = Math.random() * w;
+    const y = Math.random() * h;
+    const r = rand(8, 70);
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, 'rgba(72,96,60,0.10)');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  return c;
+}
+
+/* ============================================================
+   纹理生成：墓碑正面（含刻字）
+   右列：来世再生   左列：借尸还魂
+============================================================ */
+function createTombstoneFaceCanvas() {
+  const w = 1024, h = 1440;
+  const c = createStoneCanvas(w, h, '#909289', '#64665f');
+  const ctx = c.getContext('2d');
+
+  // 刻线边框
+  ctx.strokeStyle = 'rgba(42,44,41,0.45)';
+  ctx.lineWidth = 6;
+  ctx.strokeRect(70, 70, w - 140, h - 140);
+  ctx.strokeStyle = 'rgba(232,234,226,0.18)';
+  ctx.lineWidth = 2;
+  ctx.strokeRect(80, 80, w - 160, h - 160);
+
+  // 竖排文字
+  const cols = [
+    { x: w * 0.695, text: '来世再生' }, // 右
+    { x: w * 0.305, text: '借尸还魂' }  // 左
+  ];
+
+  const step = 182;
+  const fontSize = 152;
+
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.font = `700 ${fontSize}px "STKaiti","KaiTi","Songti SC","SimSun",serif`;
+
+  const startY = h * 0.5 - (step * 3) / 2;
+
+  for (const col of cols) {
+    const chars = Array.from(col.text);
+    chars.forEach((ch, i) => {
+      const y = startY + i * step;
+
+      // 凹陷阴影
+      ctx.fillStyle = 'rgba(18,20,18,0.60)';
+      ctx.fillText(ch, col.x + 4, y + 4);
+
+      // 受光高光
+      ctx.fillStyle = 'rgba(240,240,230,0.42)';
+      ctx.fillText(ch, col.x - 3, y - 3);
+
+      // 刻痕主体
+      ctx.fillStyle = 'rgba(44,46,43,0.95)';
+      ctx.fillText(ch, col.x, y);
+    });
+  }
+
+  // 做旧脏污覆盖
+  for (let i = 0; i < 110; i++) {
+    const x = Math.random() * w;
+    const y = Math.random() * h;
+    const r = rand(10, 95);
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    const moss = Math.random() > 0.62;
+    g.addColorStop(0, moss ? 'rgba(68,88,58,0.10)' : 'rgba(18,20,18,0.10)');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  return c;
+}
+
+/* ============================================================
+   纹理生成：木头
+============================================================ */
+function createWoodCanvas(cw, ch, planks = 3) {
+  const w = Math.max(4, Math.round(cw));
+  const h = Math.max(4, Math.round(ch));
+  const c = makeCanvas(w, h);
+  const ctx = c.getContext('2d');
+
+  ctx.fillStyle = '#4a2f1c';
+  ctx.fillRect(0, 0, w, h);
+
+  const ph = h / planks;
+
+  for (let p = 0; p < planks; p++) {
+    const y0 = p * ph;
+    const tone = rand(0.72, 1.18);
+
+    // 板底色
+    const g = ctx.createLinearGradient(0, y0, 0, y0 + ph);
+    g.addColorStop(0.0, `rgb(${Math.round(92 * tone)},${Math.round(58 * tone)},${Math.round(33 * tone)})`);
+    g.addColorStop(0.5, `rgb(${Math.round(128 * tone)},${Math.round(83 * tone)},${Math.round(48 * tone)})`);
+    g.addColorStop(1.0, `rgb(${Math.round(84 * tone)},${Math.round(52 * tone)},${Math.round(28 * tone)})`);
+    ctx.fillStyle = g;
+    ctx.fillRect(0, y0, w, ph);
+
+    // 木纹线
+    const lines = Math.max(8, Math.round(ph / 2.4));
+    for (let i = 0; i < lines; i++) {
+      const baseY = y0 + Math.random() * ph;
+      const amp = rand(1.5, 9);
+      const freq = rand(0.006, 0.022);
+      const phase = Math.random() * Math.PI * 2;
+
+      ctx.beginPath();
+      ctx.strokeStyle = `rgba(${Math.round(rand(28, 70))},${Math.round(rand(16, 40))},${Math.round(rand(6, 22))},${rand(0.06, 0.24)})`;
+      ctx.lineWidth = rand(0.6, 2.2);
+      for (let x = 0; x <= w; x += 8) {
+        const y = baseY + Math.sin(x * freq + phase) * amp;
+        if (x === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+      }
+      ctx.stroke();
+    }
+
+    // 木节
+    const knots = Math.round(rand(0, 2));
+    for (let k = 0; k < knots; k++) {
+      const kx = Math.random() * w;
+      const ky = y0 + rand(0.2, 0.8) * ph;
+      const kr = rand(4, 13);
+      for (let r = kr; r > 0; r -= 1.4) {
+        ctx.beginPath();
+        ctx.strokeStyle = `rgba(38,20,9,${0.10 + ((kr - r) / kr) * 0.30})`;
+        ctx.lineWidth = 1.2;
+        ctx.ellipse(kx, ky, r * 1.6, r * 0.72, 0, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
+
+    // 板缝
+    const seam = Math.max(2, h * 0.009);
+    ctx.fillStyle = 'rgba(14,7,3,0.88)';
+    ctx.fillRect(0, y0, w, seam);
+    ctx.fillStyle = 'rgba(206,166,124,0.13)';
+    ctx.fillRect(0, y0 + seam, w, 1.6);
+  }
+
+  // 噪点
+  const img = ctx.getImageData(0, 0, w, h);
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const n = (Math.random() - 0.5) * 28;
+    d[i]     = clamp255(d[i] + n);
+    d[i + 1] = clamp255(d[i + 1] + n);
+    d[i + 2] = clamp255(d[i + 2] + n);
+  }
+  ctx.putImageData(img, 0, 0);
+
+  return c;
+}
+
+/* ============================================================
+   地面
+============================================================ */
+function createGroundCanvas(size = 1024) {
+  const c = makeCanvas(size, size);
+  const ctx = c.getContext('2d');
+
+  ctx.fillStyle = '#1d201c';
+  ctx.fillRect(0, 0, size, size);
+
+  for (let i = 0; i < 420; i++) {
+    const x = Math.random() * size;
+    const y = Math.random() * size;
+    const r = rand(18, 150);
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    const dark = Math.random() > 0.5;
+    g.addColorStop(0, dark ? 'rgba(8,11,8,0.38)' : 'rgba(74,82,68,0.16)');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  const img = ctx.getImageData(0, 0, size, size);
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const n = (Math.random() - 0.5) * 42;
+    d[i]     = clamp255(d[i] + n);
+    d[i + 1] = clamp255(d[i + 1] + n);
+    d[i + 2] = clamp255(d[i + 2] + n);
+  }
+  ctx.putImageData(img, 0, 0);
+
+  return c;
+}
+
+const groundMat = new THREE.MeshStandardMaterial({
+  map: toTexture(createGroundCanvas(), 7, 7),
+  roughness: 1.0,
+  metalness: 0.0,
+  color: 0x9aa39a
+});
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(80, 80), groundMat);
+ground.rotation.x = -Math.PI / 2;
+ground.position.y = 0;
+ground.receiveShadow = true;
+scene.add(ground);
+
+/* ============================================================
+   墓碑
+============================================================ */
+const stoneSideTex = toTexture(createStoneCanvas(560, 820), 1, 1);
+const stoneSideMat = new THREE.MeshStandardMaterial({
+  map: stoneSideTex,
+  roughness: 0.96,
+  metalness: 0.02,
+  color: 0xc8cbc4
+});
+
+const stoneFaceMat = new THREE.MeshStandardMaterial({
+  map: toTexture(createTombstoneFaceCanvas(), 1, 1),
+  roughness: 0.92,
+  metalness: 0.02,
+  color: 0xffffff
+});
+
+const stoneTopMat = new THREE.MeshStandardMaterial({
+  map: toTexture(createStoneCanvas(560, 400, '#7d7f78', '#55574f'), 1, 1),
+  roughness: 0.98,
+  metalness: 0.02,
+  color: 0xb8bbb4
+});
+
+// BoxGeometry 材质顺序：+X, -X, +Y, -Y, +Z(正面), -Z
+const tombstoneMats = [
+  stoneSideMat, stoneSideMat,
+  stoneTopMat,  stoneSideMat,
+  stoneFaceMat, stoneSideMat
+];
+
+const TOMB_W = 2.6, TOMB_H = 3.8, TOMB_D = 0.45;
+const tombstone = new THREE.Mesh(
+  new THREE.BoxGeometry(TOMB_W, TOMB_H, TOMB_D),
+  tombstoneMats
+);
+tombstone.position.set(0, 0.3 + TOMB_H / 2, 0);
+tombstone.castShadow = true;
+tombstone.receiveShadow = true;
+scene.add(tombstone);
+
+// 墓碑底座
+const baseMat = new THREE.MeshStandardMaterial({
+  map: toTexture(createStoneCanvas(700, 300, '#7a7c75', '#53554e'), 2, 1),
+  roughness: 0.97,
+  metalness: 0.02,
+  color: 0xbfc2bb
+});
+const pedestal = new THREE.Mesh(new THREE.BoxGeometry(3.5, 0.3, 1.15), baseMat);
+pedestal.position.set(0, 0.15, 0);
+pedestal.castShadow = true;
+pedestal.receiveShadow = true;
+scene.add(pedestal);
+
+/* ============================================================
+   木质棺材
+============================================================ */
+const CW = 1.5, CH = 0.9, CL = 3.0;
+const PX = 200; // 每单位对应的像素密度
+
+function woodMaterial(u, v, planks) {
+  const canvas = createWoodCanvas(u * PX, v * PX, planks);
+  return new THREE.MeshStandardMaterial({
+    map: toTexture(canvas, 1, 1),
+    roughness: 0.82,
+    metalness: 0.03,
+    color: 0xffffff
+  });
+}
+
+const coffinMats = [
+  woodMaterial(CL, CH, 3), // +X
+  woodMaterial(CL, CH, 3), // -X
+  woodMaterial(CW, CL, 3), // +Y 顶盖
+  woodMaterial(CW, CL, 2), // -Y
+  woodMaterial(CW, CH, 2), // +Z
+  woodMaterial(CW, CH, 2)  // -Z
+];
+
+const coffin = new THREE.Mesh(
+  new THREE.BoxGeometry(CW, CH, CL),
+  coffinMats
+);
+coffin.position.set(0, CH / 2, 2.65);
+coffin.castShadow = true;
+coffin.receiveShadow = true;
+scene.add(coffin);
+
+/* ============================================================
+   香炉（木制圆柱 + 三炷燃烧的香）
+   —— 放在棺材前方
+============================================================ */
+const INCENSE_X = 0;
+const INCENSE_Z = 4.95;
+
+// 木制圆柱香炉本体
+const burnerMat = new THREE.MeshStandardMaterial({
+  map: toTexture(createWoodCanvas(360, 220, 2), 1, 1),
+  roughness: 0.86,
+  metalness: 0.03,
+  color: 0xffffff
+});
+const BURNER_R = 0.36;
+const BURNER_H = 0.56;
+const burner = new THREE.Mesh(
+  new THREE.CylinderGeometry(BURNER_R - 0.02, BURNER_R, BURNER_H, 40),
+  burnerMat
+);
+burner.position.set(INCENSE_X, BURNER_H / 2, INCENSE_Z);
+burner.castShadow = true;
+burner.receiveShadow = true;
+scene.add(burner);
+
+// 炉口（深色香灰）
+const ashMat = new THREE.MeshStandardMaterial({
+  color: 0x2b1c11,
+  roughness: 1.0,
+  metalness: 0.0
+});
+const ash = new THREE.Mesh(
+  new THREE.CircleGeometry(BURNER_R - 0.035, 40),
+  ashMat
+);
+ash.rotation.x = -Math.PI / 2;
+ash.position.set(INCENSE_X, BURNER_H - 0.012, INCENSE_Z);
+scene.add(ash);
+
+const burnerTopY = BURNER_H;          // 香插入的高度
+const INCENSE_H = 1.05;               // 香的长度
+const INCENSE_R = 0.019;              // 香的半径
+
+const incenseMat = new THREE.MeshStandardMaterial({
+  color: 0xb2895c,
+  roughness: 0.92,
+  metalness: 0.0
+});
+
+// 三炷香的位置（在炉口内稍微错开）
+const stickOffsets = [
+  { x: -0.14, z:  0.03 },
+  { x:  0.00, z: -0.09 },
+  { x:  0.14, z:  0.03 }
+];
+
+// 燃烧端（会渐渐变红）
+const EMBER_COLD = new THREE.Color(0x4a0d00);
+const EMBER_HOT  = new THREE.Color(0xff3d00);
+const embers = [];
+
+for (let i = 0; i < stickOffsets.length; i++) {
+  const off = stickOffsets[i];
+  const px = INCENSE_X + off.x;
+  const pz = INCENSE_Z + off.z;
+
+  // 香体
+  const stick = new THREE.Mesh(
+    new THREE.CylinderGeometry(INCENSE_R, INCENSE_R * 1.12, INCENSE_H, 8),
+    incenseMat
+  );
+  stick.position.set(px, burnerTopY + INCENSE_H / 2, pz);
+  stick.castShadow = true;
+  scene.add(stick);
+
+  // 燃烧端（发光球）
+  const emberMat = new THREE.MeshStandardMaterial({
+    color: 0x1c0300,
+    emissive: EMBER_HOT.clone(),
+    emissiveIntensity: 1.0,
+    roughness: 1.0,
+    metalness: 0.0
+  });
+  const ember = new THREE.Mesh(
+    new THREE.SphereGeometry(INCENSE_R * 1.45, 12, 12),
+    emberMat
+  );
+  ember.position.set(px, burnerTopY + INCENSE_H, pz);
+  scene.add(ember);
+
+  embers.push({
+    mat: emberMat,
+    phase: Math.random() * Math.PI * 2,
+    speed: rand(1.3, 2.7)
+  });
+}
+
+// 香火微弱暖光
+const emberLight = new THREE.PointLight(0xff4a00, 1.0, 3.8, 2);
+emberLight.position.set(INCENSE_X, burnerTopY + INCENSE_H + 0.12, INCENSE_Z);
+scene.add(emberLight);
+
+/* ============================================================
+   粒子（空中的尘埃 / 灵光）
+============================================================ */
+function createParticleTexture() {
+  const s = 64;
+  const c = makeCanvas(s, s);
+  const ctx = c.getContext('2d');
+  const g = ctx.createRadialGradient(s / 2, s / 2, 0, s / 2, s / 2, s / 2);
+  g.addColorStop(0.0, 'rgba(255,255,255,1)');
+  g.addColorStop(0.35, 'rgba(198,228,255,0.62)');
+  g.addColorStop(1.0, 'rgba(150,195,255,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, s, s);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent);
+const PARTICLE_COUNT = isMobile ? 900 : 1800;
+
+const positions = new Float32Array(PARTICLE_COUNT * 3);
+const speeds    = new Float32Array(PARTICLE_COUNT);
+const phases    = new Float32Array(PARTICLE_COUNT);
+
+const SPREAD_X = 34, SPREAD_Y = 16, SPREAD_Z = 34;
+
+for (let i = 0; i < PARTICLE_COUNT; i++) {
+  const i3 = i * 3;
+  positions[i3]     = (Math.random() - 0.5) * SPREAD_X;
+  positions[i3 + 1] = Math.random() * SPREAD_Y;
+  positions[i3 + 2] = (Math.random() - 0.5) * SPREAD_Z - 2;
+  speeds[i] = rand(0.10, 0.55);
+  phases[i] = Math.random() * Math.PI * 2;
+}
+
+const particleGeo = new THREE.BufferGeometry();
+particleGeo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+
+const particleMat = new THREE.PointsMaterial({
+  size: 0.13,
+  map: createParticleTexture(),
+  transparent: true,
+  opacity: 0.85,
+  depthWrite: false,
+  blending: THREE.AdditiveBlending,
+  sizeAttenuation: true,
+  color: 0xbfe0ff
+});
+
+const particles = new THREE.Points(particleGeo, particleMat);
+scene.add(particles);
+
+/* 少量更大的“灵火”粒子 */
+const bigCount = isMobile ? 60 : 110;
+const bigPos = new Float32Array(bigCount * 3);
+const bigSpeed = new Float32Array(bigCount);
+const bigPhase = new Float32Array(bigCount);
+
+for (let i = 0; i < bigCount; i++) {
+  const i3 = i * 3;
+  bigPos[i3]     = (Math.random() - 0.5) * 22;
+  bigPos[i3 + 1] = Math.random() * 9;
+  bigPos[i3 + 2] = (Math.random() - 0.5) * 22;
+  bigSpeed[i] = rand(0.15, 0.45);
+  bigPhase[i] = Math.random() * Math.PI * 2;
+}
+
+const bigGeo = new THREE.BufferGeometry();
+bigGeo.setAttribute('position', new THREE.BufferAttribute(bigPos, 3));
+
+const bigMat = new THREE.PointsMaterial({
+  size: 0.42,
+  map: createParticleTexture(),
+  transparent: true,
+  opacity: 0.55,
+  depthWrite: false,
+  blending: THREE.AdditiveBlending,
+  sizeAttenuation: true,
+  color: 0x8fc0ff
+});
+
+const bigParticles = new THREE.Points(bigGeo, bigMat);
+scene.add(bigParticles);
+
+/* ============================================================
+   控制器（鼠标 + 触摸）
+============================================================ */
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 2.05, 1.1);
+controls.enableDamping = true;
+controls.dampingFactor = 0.07;
+controls.rotateSpeed = 0.75;
+controls.zoomSpeed = 0.9;
+controls.enablePan = true;
+controls.screenSpacePanning = true;
+controls.minDistance = 4.2;
+controls.maxDistance = 24;
+controls.minPolarAngle = 0.18;
+controls.maxPolarAngle = Math.PI * 0.495;
+controls.touches = {
+  ONE: THREE.TOUCH.ROTATE,
+  TWO: THREE.TOUCH.DOLLY_PAN
+};
+controls.update();
+
+/* ============================================================
+   动画循环
+============================================================ */
+const clock = new THREE.Clock();
+
+function animate() {
+  requestAnimationFrame(animate);
+
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const t  = clock.elapsedTime;
+
+  /* --- 小粒子上升漂移 --- */
+  const p = particleGeo.attributes.position.array;
+  for (let i = 0; i < PARTICLE_COUNT; i++) {
+    const i3 = i * 3;
+    p[i3 + 1] += speeds[i] * dt;
+    p[i3]     += Math.sin(t * 0.55 + phases[i]) * 0.006;
+    p[i3 + 2] += Math.cos(t * 0.45 + phases[i]) * 0.006;
+
+    if (p[i3 + 1] > SPREAD_Y) {
+      p[i3 + 1] = -0.8;
+      p[i3]     = (Math.random() - 0.5) * SPREAD_X;
+      p[i3 + 2] = (Math.random() - 0.5) * SPREAD_Z - 2;
+    }
+  }
+  particleGeo.attributes.position.needsUpdate = true;
+
+  /* --- 大粒子（灵火）缓慢环绕 --- */
+  const bp = bigGeo.attributes.position.array;
+  for (let i = 0; i < bigCount; i++) {
+    const i3 = i * 3;
+    bp[i3 + 1] += bigSpeed[i] * dt;
+    bp[i3]     += Math.sin(t * 0.35 + bigPhase[i]) * 0.012;
+    bp[i3 + 2] += Math.cos(t * 0.30 + bigPhase[i]) * 0.012;
+
+    if (bp[i3 + 1] > 10.5) {
+      bp[i3 + 1] = -0.5;
+      bp[i3]     = (Math.random() - 0.5) * 22;
+      bp[i3 + 2] = (Math.random() - 0.5) * 22;
+    }
+  }
+  bigGeo.attributes.position.needsUpdate = true;
+
+  /* --- 香头渐渐变红（呼吸式明暗） --- */
+  for (let i = 0; i < embers.length; i++) {
+    const e = embers[i];
+    const pulse = 0.5 + 0.5 * Math.sin(t * e.speed + e.phase); // 0~1
+    const hot = 0.22 + 0.78 * pulse;
+
+    e.mat.emissive.copy(EMBER_COLD).lerp(EMBER_HOT, hot);
+    e.mat.emissiveIntensity = 0.55 + hot * 2.0;
+  }
+
+  /* --- 香火暖光同步明暗 --- */
+  emberLight.intensity = 0.7 + 0.7 * (0.5 + 0.5 * Math.sin(t * 2.1));
+
+  /* --- 正面补光轻微呼吸 --- */
+  fillLight.intensity = 24 + Math.sin(t * 1.3) * 4;
+
+  controls.update();
+  renderer.render(scene, camera);
+}
+
+animate();
+
+/* ============================================================
+   自适应
+============================================================ */
+function onResize() {
+  const w = innerWidth, h = innerHeight;
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.setSize(w, h);
+}
+addEventListener('resize', onResize);
+addEventListener('orientationchange', () => setTimeout(onResize, 220));
+</script>
+</body>
+</html>
