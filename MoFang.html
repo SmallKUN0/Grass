@@ -1,0 +1,1113 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>3D可转魔方</title>
+<!-- 
+  坤坤工作室 · 
+  参考图片网址: https://smallkun0.github.io/Threeblock/XiaoKunKun.jpg
+-->
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden;background:#fff;
+  font-family:-apple-system,BlinkMacSystemFont,"PingFang SC","Microsoft YaHei",sans-serif}
+
+#scene{position:relative;width:100%;height:100%;perspective:1400px;
+  perspective-origin:50% 50%;cursor:grab;user-select:none;-webkit-user-select:none;
+  -webkit-tap-highlight-color:transparent;overflow:hidden;will-change:transform}
+#scene.dragging{cursor:grabbing}
+#scene.shake{animation:shake .65s cubic-bezier(.36,.07,.19,.97)}
+
+@keyframes shake{
+  0%  {transform:translate(0,0)      rotate(0deg)}
+  10% {transform:translate(-12px,7px) rotate(-1deg)}
+  20% {transform:translate(10px,-9px) rotate(1deg)}
+  30% {transform:translate(-8px,-5px) rotate(-.6deg)}
+  40% {transform:translate(10px,8px)  rotate(.8deg)}
+  50% {transform:translate(-9px,-7px) rotate(-.6deg)}
+  60% {transform:translate(7px,5px)   rotate(.4deg)}
+  70% {transform:translate(-5px,-7px) rotate(-.4deg)}
+  80% {transform:translate(6px,4px)   rotate(.3deg)}
+  90% {transform:translate(-3px,-2px) rotate(-.2deg)}
+  100%{transform:translate(0,0)      rotate(0deg)}
+}
+
+#world{position:absolute;left:50%;top:50%;width:0;height:0;
+  transform-style:preserve-3d;will-change:transform}
+#cube{position:absolute;left:0;top:0;width:0;height:0;transform-style:preserve-3d}
+
+.cubie{position:absolute;transform-style:preserve-3d}
+.cubie .face{position:absolute;left:0;top:0;background:#0d0d0d;
+  display:flex;align-items:center;justify-content:center;
+  backface-visibility:hidden;-webkit-backface-visibility:hidden;
+  transform-style:flat}
+.cubie .sticker{position:absolute;border-radius:5px;background:#fff;
+  transition:box-shadow .12s;
+  backface-visibility:hidden;-webkit-backface-visibility:hidden;
+  will-change:background}
+
+#cube.operate-mode .sticker{cursor:pointer}
+#cube.operate-mode .sticker:not(.dimmed):not(.selected):hover{
+  box-shadow:inset 0 0 0 2px rgba(255,255,255,.85)}
+
+.sticker.dimmed{
+  box-shadow:inset 0 0 0 999px rgba(255,255,255,.82);
+  pointer-events:none}
+.sticker.selected{
+  box-shadow:inset 0 0 0 3px #ffd700,inset 0 0 0 999px rgba(255,215,0,.18)}
+
+#yaxis{position:absolute;left:0;top:0;width:0;height:0;
+  transform-style:preserve-3d;pointer-events:none}
+.yline{position:absolute;left:-1px;top:-260px;width:2px;height:520px;
+  background:linear-gradient(to bottom,
+    rgba(255,215,0,0),#ffd700 12%,#ffd700 88%,rgba(255,215,0,0));
+  box-shadow:0 0 6px rgba(255,200,0,.75);border-radius:1px}
+.yline.cross{transform:rotateY(90deg)}
+
+.ui{position:absolute;display:flex;gap:8px;z-index:10}
+.ui-left{left:16px;top:16px;flex-direction:column}
+.ui-right{right:16px;top:16px;flex-direction:column;align-items:flex-end}
+.ui-left-bottom{left:16px;bottom:16px;align-items:center;
+  background:rgba(255,255,255,.9);padding:8px 12px;border-radius:10px;
+  box-shadow:0 2px 10px rgba(0,0,0,.12);font-size:13px;color:#222}
+.ui button{padding:9px 16px;border:none;border-radius:9px;background:#1f1f1f;
+  color:#fff;font-size:13px;font-family:inherit;cursor:pointer;white-space:nowrap;
+  box-shadow:0 2px 8px rgba(0,0,0,.18);transition:background .15s,transform .1s}
+.ui button:hover{background:#333}
+.ui button:active{transform:scale(.96)}
+.ui button.on{background:#e6b800;color:#111}
+#btnShatter{background:#c0392b}
+#btnShatter:hover{background:#e74c3c}
+
+#orderInput{width:56px;padding:6px 8px;border:1px solid #ccc;border-radius:7px;
+  font-size:13px;font-family:inherit;text-align:center;outline:none}
+#orderInput:focus{border-color:#888}
+.ui-left-bottom button{padding:6px 12px;font-size:12px}
+
+#credit{position:absolute;right:16px;bottom:16px;font-size:14px;color:#444;
+  pointer-events:none;user-select:none;letter-spacing:.5px}
+
+/* ---- 自定义弹窗 ---- */
+#modal{position:fixed;inset:0;background:rgba(0,0,0,.5);
+  display:flex;align-items:center;justify-content:center;z-index:200;
+  backdrop-filter:blur(3px);-webkit-backdrop-filter:blur(3px);
+  animation:fadeIn .18s ease}
+@keyframes fadeIn{from{opacity:0}to{opacity:1}}
+#modal.hidden{display:none}
+.modal-content{background:#fff;padding:26px 30px;border-radius:16px;
+  box-shadow:0 12px 40px rgba(0,0,0,.3);max-width:380px;
+  text-align:center;animation:pop .22s cubic-bezier(.34,1.56,.64,1)}
+@keyframes pop{from{transform:scale(.85);opacity:0}to{transform:scale(1);opacity:1}}
+.modal-content p{font-size:15px;line-height:1.6;color:#222;margin-bottom:22px}
+.modal-btns{display:flex;gap:10px;justify-content:center}
+.modal-btns button{padding:10px 24px;border:none;border-radius:9px;
+  font-size:14px;font-family:inherit;cursor:pointer;transition:background .15s}
+.modal-btns button.ok{background:#1f1f1f;color:#fff}
+.modal-btns button.ok:hover{background:#333}
+.modal-btns button.cancel{background:#e8e8e8;color:#222}
+.modal-btns button.cancel:hover{background:#d8d8d8}
+</style>
+</head>
+<body>
+
+<div id="scene">
+  <div id="world">
+    <div id="cube"></div>
+    <div id="yaxis">
+      <div class="yline"></div>
+      <div class="yline cross"></div>
+    </div>
+  </div>
+</div>
+
+<div class="ui ui-left">
+  <button id="btnScramble">一键打乱</button>
+  <button id="btnRestore">直接还原</button>
+  <button id="btnShatter">打碎</button>
+</div>
+<div class="ui ui-right">
+  <button id="btnSlideMode">滑动模式</button>
+  <button id="btnMode">切换阅览和操作状态</button>
+</div>
+<div class="ui ui-left-bottom">
+  <span>阶数：</span>
+  <input id="orderInput" type="number" min="2" max="10" step="1" value="3">
+  <button id="btnOrderApply">应用</button>
+</div>
+
+<div id="credit">🏀坤坤工作室</div>
+
+<!-- 自定义弹窗（文件硬编码，替代浏览器内置弹窗） -->
+<div id="modal" class="hidden">
+  <div class="modal-content">
+    <p id="modalText"></p>
+    <div class="modal-btns">
+      <button id="modalCancel" class="cancel">取消</button>
+      <button id="modalOk" class="ok">确认</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+'use strict';
+
+/* ==================== 常量 ==================== */
+const BASE_SIZE  = 240;
+const MAX_ORDER  = 10;
+const WARN_ORDER = 4;
+let   SIZE = 80;
+let   HALF = 40;
+let   N    = 3;
+
+const FACE_COLORS = {
+  '0,0,1'  :'#ffffff',
+  '0,0,-1' :'#ffeb3b',
+  '1,0,0'  :'#ff5722',
+  '-1,0,0' :'#ff1744',
+  '0,-1,0' :'#2196f3',
+  '0,1,0'  :'#4caf50'
+};
+const COLOR_KEYS = Object.keys(FACE_COLORS);
+
+const IDENTITY = [1,0,0, 0,1,0, 0,0,1];
+
+/* ==================== 矩阵工具 ==================== */
+function mat3Mul(a,b){
+  const r = new Array(9);
+  for(let i=0;i<3;i++)for(let j=0;j<3;j++)
+    r[i*3+j] = a[i*3]*b[j] + a[i*3+1]*b[3+j] + a[i*3+2]*b[6+j];
+  return r;
+}
+function mat3Apply(m,v){
+  return [
+    m[0]*v[0]+m[1]*v[1]+m[2]*v[2],
+    m[3]*v[0]+m[4]*v[1]+m[5]*v[2],
+    m[6]*v[0]+m[7]*v[1]+m[8]*v[2]
+  ];
+}
+function rotX(a){ const c=Math.cos(a),s=Math.sin(a); return [1,0,0, 0,c,-s, 0,s,c]; }
+function rotY(a){ const c=Math.cos(a),s=Math.sin(a); return [c,0,s, 0,1,0, -s,0,c]; }
+function rotZ(a){ const c=Math.cos(a),s=Math.sin(a); return [c,-s,0, s,c,0, 0,0,1]; }
+function rotAxis(axis, angle){
+  if(axis === 'x') return rotX(angle);
+  if(axis === 'y') return rotY(angle);
+  return rotZ(angle);
+}
+function axisIndex(axis){
+  return axis === 'x' ? 0 : axis === 'y' ? 1 : 2;
+}
+
+/* 四元数 */
+function quatFromAxisAngle(axis,angle){
+  const h=angle/2, s=Math.sin(h);
+  return [axis[0]*s, axis[1]*s, axis[2]*s, Math.cos(h)];
+}
+function quatMul(a,b){
+  return [
+    a[3]*b[0] + a[0]*b[3] + a[1]*b[2] - a[2]*b[1],
+    a[3]*b[1] - a[0]*b[2] + a[1]*b[3] + a[2]*b[0],
+    a[3]*b[2] + a[0]*b[1] - a[1]*b[0] + a[2]*b[3],
+    a[3]*b[3] - a[0]*b[0] - a[1]*b[1] - a[2]*b[2]
+  ];
+}
+function quatToMat3(q){
+  const x=q[0], y=q[1], z=q[2], w=q[3];
+  const x2=x+x, y2=y+y, z2=z+z;
+  const xx=x*x2, xy=x*y2, xz=x*z2;
+  const yy=y*y2, yz=y*z2, zz=z*z2;
+  const wx=w*x2, wy=w*y2, wz=w*z2;
+  return [
+    1-(yy+zz), xy-wz,     xz+wy,
+    xy+wz,     1-(xx+zz), yz-wx,
+    xz-wy,     yz+wx,     1-(xx+yy)
+  ];
+}
+function quatToCss(q){
+  const m = quatToMat3(q);
+  return 'matrix3d('+
+    m[0]+','+m[3]+','+m[6]+',0,'+
+    m[1]+','+m[4]+','+m[7]+',0,'+
+    m[2]+','+m[5]+','+m[8]+',0,'+
+    '0,0,0,1)';
+}
+
+function snapRotationMatrix(r){
+  const out = new Array(9);
+  for(let i=0;i<9;i++){
+    const v = r[i];
+    if(v >  0.9999) out[i] =  1;
+    else if(v < -0.9999) out[i] = -1;
+    else if(Math.abs(v) < 0.0001) out[i] = 0;
+    else out[i] = v;
+  }
+  return out;
+}
+
+function cssMatrix(r, pos, s){
+  const rs = snapRotationMatrix(r);
+  const tx = pos[0]*SIZE, ty = pos[1]*SIZE, tz = pos[2]*SIZE;
+  return 'matrix3d('+
+    (rs[0]*s)+','+(rs[3]*s)+','+(rs[6]*s)+',0,'+
+    (rs[1]*s)+','+(rs[4]*s)+','+(rs[7]*s)+',0,'+
+    (rs[2]*s)+','+(rs[5]*s)+','+(rs[8]*s)+',0,'+
+    tx+','+ty+','+tz+',1)';
+}
+function cssMatrixRaw(r, px, py, pz, s){
+  return 'matrix3d('+
+    (r[0]*s)+','+(r[3]*s)+','+(r[6]*s)+',0,'+
+    (r[1]*s)+','+(r[4]*s)+','+(r[7]*s)+',0,'+
+    (r[2]*s)+','+(r[5]*s)+','+(r[8]*s)+',0,'+
+    px+','+py+','+pz+',1)';
+}
+
+function isOnSurface(pos, dir, n){
+  const h = n / 2;
+  for(let i=0;i<3;i++){
+    if(dir[i] === 0) continue;
+    const c = pos[i] + 0.5 * dir[i];
+    if(Math.abs(Math.abs(c) - h) < 0.001) return true;
+  }
+  return false;
+}
+
+/* ==================== DOM ==================== */
+const scene      = document.getElementById('scene');
+const world      = document.getElementById('world');
+const cubeEl     = document.getElementById('cube');
+const btnMode    = document.getElementById('btnMode');
+const btnSlideMode = document.getElementById('btnSlideMode');
+const btnScramble= document.getElementById('btnScramble');
+const btnRestore = document.getElementById('btnRestore');
+const btnShatter = document.getElementById('btnShatter');
+const orderInput = document.getElementById('orderInput');
+const btnOrderApply = document.getElementById('btnOrderApply');
+const yaxisEl    = document.getElementById('yaxis');
+const modalEl    = document.getElementById('modal');
+const modalText  = document.getElementById('modalText');
+const modalOk    = document.getElementById('modalOk');
+const modalCancel= document.getElementById('modalCancel');
+
+/* ==================== 全局状态 ==================== */
+let cubies = [];
+let cubieScale = 1;
+let mode = 'browse';
+let slideMode = false;
+let selected = null;
+let q = [0,0,0,1];
+let zoom = 1;
+let isDown = false, lastX=0, lastY=0, downX=0, downY=0, didDrag=false;
+let animating = false;
+const moveQueue = [];
+let generation = 0;
+
+let pinchStartDist = 0;
+let pinchStartZoom = 1;
+
+let shattering = false;
+
+let longPressTimer = null;
+let longPressActive = false;
+let longPressCubie = null;
+let longPressStartX = 0, longPressStartY = 0;
+
+/* 滑动模式状态 */
+let slideTracking = false;
+let slideFirstEl = null;
+let slideFirstCubie = null;
+let slideFirstFaceIndex = -1;
+let slideFirst = null;
+
+/* ==================== 自定义弹窗 ==================== */
+function showModal(text, showCancel){
+  if(showCancel === undefined) showCancel = true;
+  return new Promise(function(resolve){
+    modalText.textContent = text;
+    modalCancel.style.display = showCancel ? '' : 'none';
+    modalEl.classList.remove('hidden');
+
+    function cleanup(result){
+      modalEl.classList.add('hidden');
+      modalOk.removeEventListener('click', okHandler);
+      modalCancel.removeEventListener('click', cancelHandler);
+      resolve(result);
+    }
+    function okHandler(){ cleanup(true); }
+    function cancelHandler(){ cleanup(false); }
+
+    modalOk.addEventListener('click', okHandler);
+    modalCancel.addEventListener('click', cancelHandler);
+  });
+}
+
+/* ==================== 构建魔方 ==================== */
+function buildCube(n){
+  N    = n;
+  SIZE = BASE_SIZE / N;
+  HALF = SIZE / 2;
+
+  cubeEl.innerHTML = '';
+  cubies = [];
+  didDrag = false;
+
+  const facesDef = [
+    { dir:[ 0, 0, 1], tr:'translateZ('+HALF+'px)' },
+    { dir:[ 0, 0,-1], tr:'rotateY(180deg) translateZ('+HALF+'px)' },
+    { dir:[ 1, 0, 0], tr:'rotateY(90deg) translateZ('+HALF+'px)' },
+    { dir:[-1, 0, 0], tr:'rotateY(-90deg) translateZ('+HALF+'px)' },
+    { dir:[ 0,-1, 0], tr:'rotateX(90deg) translateZ('+HALF+'px)' },
+    { dir:[ 0, 1, 0], tr:'rotateX(-90deg) translateZ('+HALF+'px)' }
+  ];
+
+  const offset = (N - 1) / 2;
+  const br    = Math.max(1, Math.round(SIZE * 0.08));
+  const inset = Math.max(1, Math.round(SIZE * 0.04));
+
+  const frag = document.createDocumentFragment();
+
+  for(let xi=0; xi<N; xi++)
+  for(let yi=0; yi<N; yi++)
+  for(let zi=0; zi<N; zi++){
+
+    const el = document.createElement('div');
+    el.className = 'cubie';
+    el.style.left   = (-HALF) + 'px';
+    el.style.top    = (-HALF) + 'px';
+    el.style.width  = SIZE + 'px';
+    el.style.height = SIZE + 'px';
+
+    const pos = [xi - offset, yi - offset, zi - offset];
+
+    const isCorner =
+      (xi === 0 || xi === N-1) &&
+      (yi === 0 || yi === N-1) &&
+      (zi === 0 || zi === N-1);
+
+    const cubie = {
+      el, faces: [],
+      pos: pos.slice(),
+      home: pos.slice(),
+      rot: IDENTITY.slice(),
+      isCorner: isCorner
+    };
+
+    facesDef.forEach((f, fi)=>{
+      const faceEl = document.createElement('div');
+      faceEl.className = 'face';
+      faceEl.style.width  = SIZE + 'px';
+      faceEl.style.height = SIZE + 'px';
+      faceEl.style.borderRadius = br + 'px';
+      faceEl.style.transform = f.tr;
+
+      const st = document.createElement('div');
+      st.className = 'sticker';
+      st.style.inset = inset + 'px';
+      st.style.borderRadius = Math.max(1, br - 1) + 'px';
+      faceEl.appendChild(st);
+
+      /* 用引用方便滑动模式查找 */
+      st.__cubieRef = cubie;
+      st.__faceIndexRef = fi;
+
+      let outward0 = false;
+      if(f.dir[0] ===  1 && xi === N-1) outward0 = true;
+      if(f.dir[0] === -1 && xi === 0)   outward0 = true;
+      if(f.dir[1] ===  1 && yi === N-1) outward0 = true;
+      if(f.dir[1] === -1 && yi === 0)   outward0 = true;
+      if(f.dir[2] ===  1 && zi === N-1) outward0 = true;
+      if(f.dir[2] === -1 && zi === 0)   outward0 = true;
+
+      const color = outward0 ? (FACE_COLORS[f.dir.join(',')] || '#888') : null;
+
+      st.addEventListener('click', function(ev){
+        ev.stopPropagation();
+        onStickerClick(cubie, fi);
+      });
+
+      /* 长按角块（滑动模式下不触发） */
+      st.addEventListener('mousedown', function(ev){
+        if(slideMode) return;
+        if(mode !== 'operate') return;
+        if(!cubie.isCorner)    return;
+        startLongPress(cubie, ev.clientX, ev.clientY);
+      });
+      st.addEventListener('touchstart', function(ev){
+        if(slideMode) return;
+        if(mode !== 'operate') return;
+        if(!cubie.isCorner)    return;
+        if(ev.touches.length !== 1) return;
+        startLongPress(cubie, ev.touches[0].clientX, ev.touches[0].clientY);
+      }, {passive:true});
+
+      faceEl.appendChild(st);
+      el.appendChild(faceEl);
+      cubie.faces.push({ el: faceEl, sticker: st, dir: f.dir, color: color });
+    });
+
+    frag.appendChild(el);
+    cubies.push(cubie);
+  }
+
+  cubeEl.appendChild(frag);
+
+  let i = 0;
+  function batch(){
+    const end = Math.min(i + 60, cubies.length);
+    for(; i < end; i++) updateCubie(cubies[i]);
+    if(i < cubies.length) requestAnimationFrame(batch);
+  }
+  requestAnimationFrame(batch);
+}
+
+function updateCubie(c){
+  c.el.style.transform = cssMatrix(c.rot, c.pos, cubieScale);
+
+  c.faces.forEach(f=>{
+    if(!f.color){ f.sticker.style.display = 'none'; return; }
+
+    const wd = mat3Apply(c.rot, f.dir).map(Math.round);
+
+    if(isOnSurface(c.pos, wd, N)){
+      if(f.sticker.style.display !== '') f.sticker.style.display = '';
+      f.sticker.style.background = f.color;
+    }else{
+      if(f.sticker.style.display !== 'none') f.sticker.style.display = 'none';
+    }
+  });
+}
+
+/* ==================== 整体变换 ==================== */
+function applyTransform(){
+  world.style.transform = 'scale(' + zoom + ') ' + quatToCss(q);
+}
+
+/* ---- 场景按下：滑动模式下若按在贴纸上则不转视角 ---- */
+scene.addEventListener('mousedown', e=>{
+  if(shattering) return;
+  if(e.button !== 0) return;
+
+  if(slideMode){
+    const stickerEl = e.target && e.target.closest ? e.target.closest('.sticker') : null;
+    if(stickerEl){
+      startSlide(stickerEl);
+      return;   /* ★ 滑动模式下按住贴纸不旋转视角 */
+    }
+  }
+
+  isDown = true;
+  lastX = downX = e.clientX;
+  lastY = downY = e.clientY;
+  didDrag = false;
+  scene.classList.add('dragging');
+});
+
+window.addEventListener('mousemove', e=>{
+  /* 滑动模式：追踪鼠标下的第二个贴纸 */
+  if(slideTracking){
+    handleSlideMove(e.clientX, e.clientY);
+    return;
+  }
+
+  if(longPressActive){
+    if(Math.abs(e.clientX - longPressStartX) +
+       Math.abs(e.clientY - longPressStartY) > 8){
+      cancelLongPress();
+    }
+  }
+
+  if(!isDown || shattering) return;
+  const dx = e.clientX - lastX;
+  const dy = e.clientY - lastY;
+  lastX = e.clientX; lastY = e.clientY;
+  if(Math.abs(e.clientX-downX) + Math.abs(e.clientY-downY) > 5) didDrag = true;
+  if(dx === 0 && dy === 0) return;
+  const k = 0.35 * Math.PI / 180;
+  const qy = quatFromAxisAngle([0,1,0],  dx * k);
+  const qx = quatFromAxisAngle([1,0,0], -dy * k);
+  q = quatMul(quatMul(qy,qx), q);
+  applyTransform();
+});
+
+window.addEventListener('mouseup', ()=>{
+  if(slideTracking) endSlide();
+  isDown = false;
+  scene.classList.remove('dragging');
+  cancelLongPress();
+});
+
+/* ---- 触摸：单指拖拽 + 双指缩放 + 滑动模式 ---- */
+scene.addEventListener('touchstart', e=>{
+  if(shattering) return;
+  if(e.touches.length === 2){
+    cancelLongPress();
+    endSlide();
+    pinchStartDist = Math.hypot(
+      e.touches[0].clientX - e.touches[1].clientX,
+      e.touches[0].clientY - e.touches[1].clientY
+    );
+    pinchStartZoom = zoom;
+    isDown = false;
+    return;
+  }
+  if(e.touches.length !== 1) return;
+
+  if(slideMode){
+    const stickerEl = e.target && e.target.closest ? e.target.closest('.sticker') : null;
+    if(stickerEl){
+      startSlide(stickerEl);
+      return;
+    }
+  }
+
+  isDown = true;
+  lastX = downX = e.touches[0].clientX;
+  lastY = downY = e.touches[0].clientY;
+  didDrag = false;
+},{passive:true});
+
+window.addEventListener('touchmove', e=>{
+  if(slideTracking && e.touches[0]){
+    handleSlideMove(e.touches[0].clientX, e.touches[0].clientY);
+    return;
+  }
+
+  if(longPressActive && e.touches[0]){
+    if(Math.abs(e.touches[0].clientX - longPressStartX) +
+       Math.abs(e.touches[0].clientY - longPressStartY) > 8){
+      cancelLongPress();
+    }
+  }
+
+  if(shattering) return;
+  if(e.touches.length === 2 && pinchStartDist > 0){
+    const dist = Math.hypot(
+      e.touches[0].clientX - e.touches[1].clientX,
+      e.touches[0].clientY - e.touches[1].clientY
+    );
+    zoom = Math.max(0.3, Math.min(3, pinchStartZoom * dist / pinchStartDist));
+    applyTransform();
+    e.preventDefault();
+    return;
+  }
+  if(!isDown || e.touches.length !== 1) return;
+  const t = e.touches[0];
+  const dx = t.clientX - lastX;
+  const dy = t.clientY - lastY;
+  lastX = t.clientX; lastY = t.clientY;
+  if(Math.abs(t.clientX-downX) + Math.abs(t.clientY-downY) > 5) didDrag = true;
+  const k = 0.35 * Math.PI / 180;
+  const qy = quatFromAxisAngle([0,1,0],  dx * k);
+  const qx = quatFromAxisAngle([1,0,0], -dy * k);
+  q = quatMul(quatMul(qy,qx), q);
+  applyTransform();
+  e.preventDefault();
+},{passive:false});
+
+window.addEventListener('touchend', e=>{
+  if(e.touches.length < 2) pinchStartDist = 0;
+  if(e.touches.length === 0){
+    isDown = false;
+    cancelLongPress();
+    if(slideTracking) endSlide();
+  }
+});
+
+scene.addEventListener('wheel', e=>{
+  if(shattering) return;
+  e.preventDefault();
+  const factor = e.deltaY > 0 ? 0.9 : 1.1;
+  zoom = Math.max(0.3, Math.min(3, zoom * factor));
+  applyTransform();
+},{passive:false});
+
+/* ==================== 滑动模式逻辑 ==================== */
+function startSlide(stickerEl){
+  endSlide();        /* 清理旧状态 */
+  const cubie = stickerEl.__cubieRef;
+  const fi    = stickerEl.__faceIndexRef;
+  if(!cubie) return;
+
+  slideTracking = true;
+  slideFirstEl  = stickerEl;
+  slideFirstCubie = cubie;
+  slideFirstFaceIndex = fi;
+  slideFirst = stickerInfo(cubie, fi);
+
+  stickerEl.classList.add('selected');
+}
+
+function handleSlideMove(clientX, clientY){
+  if(!slideTracking || !slideFirst) return;
+
+  const el = document.elementFromPoint(clientX, clientY);
+  if(!el) return;
+
+  const stickerEl = el.closest ? el.closest('.sticker') : null;
+  if(!stickerEl) return;
+  if(stickerEl === slideFirstEl) return;
+
+  const cubie = stickerEl.__cubieRef;
+  const fi    = stickerEl.__faceIndexRef;
+  if(!cubie) return;
+  if(cubie === slideFirstCubie && fi === slideFirstFaceIndex) return;
+
+  /* 找到第二个贴纸：旋转，然后结束本次滑动（每次最多两个） */
+  const second = stickerInfo(cubie, fi);
+  doRotation(slideFirst, second);
+  endSlide();
+}
+
+function endSlide(){
+  if(slideFirstEl){
+    slideFirstEl.classList.remove('selected');
+  }
+  slideTracking = false;
+  slideFirstEl = null;
+  slideFirstCubie = null;
+  slideFirstFaceIndex = -1;
+  slideFirst = null;
+}
+
+/* ==================== 长按角块效果 ==================== */
+function startLongPress(cubie, x, y){
+  cancelLongPress();
+  longPressActive  = true;
+  longPressCubie   = cubie;
+  longPressStartX  = x;
+  longPressStartY  = y;
+  longPressTimer = setTimeout(function(){
+    if(!longPressActive) return;
+    const c = longPressCubie;
+    longPressActive = false;
+    longPressTimer = null;
+    didDrag = true;
+    triggerCornerEffect(c);
+  }, 1500);
+}
+function cancelLongPress(){
+  longPressActive = false;
+  longPressCubie  = null;
+  if(longPressTimer){ clearTimeout(longPressTimer); longPressTimer = null; }
+}
+
+/*
+  角块效果：
+  1) 该角块现有贴图颜色重新洗牌（多重集不变）
+  2) 小方块绕随机轴旋转 90° 并回弹（"装样子"）
+*/
+function triggerCornerEffect(cubie){
+  const colorList = [];
+  cubie.faces.forEach(f=>{ if(f.color) colorList.push(f.color); });
+
+  /* Fisher–Yates 洗牌 */
+  for(let i=colorList.length-1; i>0; i--){
+    const j = Math.floor(Math.random() * (i + 1));
+    const tmp = colorList[i];
+    colorList[i] = colorList[j];
+    colorList[j] = tmp;
+  }
+
+  let idx = 0;
+  cubie.faces.forEach(f=>{
+    if(!f.color) return;
+    f.color = colorList[idx++];
+  });
+  updateCubie(cubie);
+
+  /* 视觉旋转 90° */
+  const axis  = ['x','y','z'][Math.floor(Math.random()*3)];
+  const sign  = Math.random() < 0.5 ? 1 : -1;
+  const total = (Math.PI / 2) * sign;
+  const duration = 380;
+  const t0 = performance.now();
+  const baseRot = cubie.rot.slice();
+  const basePos = cubie.pos.slice();
+
+  function frame(now){
+    let t = (now - t0) / duration;
+    if(t > 1) t = 1;
+    const e = t < 0.5 ? 2*t*t : 1 - Math.pow(-2*t+2, 2)/2;
+    const Re = rotAxis(axis, total * e);
+    const r  = mat3Mul(Re, baseRot);
+    cubie.el.style.transform = cssMatrixRaw(
+      r,
+      basePos[0]*SIZE, basePos[1]*SIZE, basePos[2]*SIZE,
+      cubieScale
+    );
+    if(t < 1){
+      requestAnimationFrame(frame);
+    }else{
+      updateCubie(cubie);
+    }
+  }
+  requestAnimationFrame(frame);
+}
+
+/* ==================== 层旋转（矩阵，动画） ==================== */
+function rotateLayer(axis, layer, angle, duration, cb){
+  const ia = axisIndex(axis);
+  const affected = cubies.filter(c => Math.abs(c.pos[ia] - layer) < 0.01);
+  if(affected.length === 0){ if(cb) cb(); return; }
+
+  const myGen  = generation;
+  const t0     = performance.now();
+  const R      = rotAxis(axis, angle);
+  const startPos = affected.map(c=>c.pos.slice());
+  const startRot = affected.map(c=>c.rot.slice());
+
+  function frame(now){
+    if(myGen !== generation) return;
+    let t = (now - t0) / duration;
+    if(t > 1) t = 1;
+    const e = t < 0.5 ? 2*t*t : 1 - Math.pow(-2*t+2, 2)/2;
+    const Re = rotAxis(axis, angle * e);
+    for(let i=0;i<affected.length;i++){
+      const c = affected[i];
+      const p = mat3Apply(Re, startPos[i]);
+      const r = mat3Mul(Re, startRot[i]);
+      c.el.style.transform = cssMatrix(r, p, cubieScale);
+    }
+    if(t < 1){
+      requestAnimationFrame(frame);
+    }else{
+      for(let i=0;i<affected.length;i++){
+        const c = affected[i];
+        const np = mat3Apply(R, startPos[i]);
+        c.pos = [Math.round(np[0]*2)/2, Math.round(np[1]*2)/2, Math.round(np[2]*2)/2];
+        c.rot = mat3Mul(R, startRot[i]).map(Math.round);
+        updateCubie(c);
+      }
+      if(cb) cb();
+    }
+  }
+  requestAnimationFrame(frame);
+}
+
+function queueMove(axis, layer, angle, duration){
+  moveQueue.push({axis, layer, angle, duration});
+  if(!animating){ animating = true; nextMove(); }
+}
+function nextMove(){
+  if(moveQueue.length === 0){ animating = false; return; }
+  const m = moveQueue.shift();
+  rotateLayer(m.axis, m.layer, m.angle, m.duration, nextMove);
+}
+
+/* ==================== 阅览 / 操作 状态 ==================== */
+function setMode(m){
+  mode = m;
+  clearSelection();
+  cancelLongPress();
+  cubieScale = (m === 'operate') ? 0.94 : 1;
+  cubeEl.classList.toggle('operate-mode', m === 'operate');
+  btnMode.classList.toggle('on', m === 'operate');
+  cubies.forEach(updateCubie);
+}
+
+function clearSelection(){
+  selected = null;
+  cubies.forEach(c=>c.faces.forEach(f=>{
+    f.sticker.classList.remove('dimmed','selected');
+  }));
+}
+
+function stickerInfo(cubie, fi){
+  return {
+    cubie: cubie,
+    faceIndex: fi,
+    worldDir: mat3Apply(cubie.rot, cubie.faces[fi].dir).map(Math.round)
+  };
+}
+
+function isRelated(a, b){
+  return a.worldDir[0]===b.worldDir[0] &&
+         a.worldDir[1]===b.worldDir[1] &&
+         a.worldDir[2]===b.worldDir[2];
+}
+
+function applyHighlight(){
+  const first = selected;
+  cubies.forEach(c=>{
+    c.faces.forEach((f, fi)=>{
+      const st = f.sticker;
+      st.classList.remove('dimmed','selected');
+      if(st.style.display === 'none') return;
+      if(c === first.cubie && fi === first.faceIndex){
+        st.classList.add('selected');
+      }else{
+        const info = stickerInfo(c, fi);
+        if(!isRelated(first, info)) st.classList.add('dimmed');
+      }
+    });
+  });
+}
+
+function onStickerClick(cubie, fi){
+  if(shattering) return;
+  if(slideMode)  return;    /* ★ 滑动模式下点击不参与普通选择 */
+  if(mode !== 'operate') return;
+  if(didDrag)          return;
+  if(animating)        return;
+  if(cubie.faces[fi].sticker.style.display === 'none') return;
+
+  const info = stickerInfo(cubie, fi);
+
+  if(!selected){
+    selected = info;
+    applyHighlight();
+  }else{
+    if(selected.cubie === cubie && selected.faceIndex === fi){
+      clearSelection();
+      return;
+    }
+    if(isRelated(selected, info)){
+      doRotation(selected, info);
+    }
+    clearSelection();
+  }
+}
+
+/* ==================== 旋转轴 / 层 / 方向（保持不变） ==================== */
+function chooseRotationAxis(A, B){
+  const d  = A.worldDir;
+  const pa = A.cubie.pos;
+  const pb = B.cubie.pos;
+
+  const candidates = [];
+  if(d[0] === 0) candidates.push('x');
+  if(d[1] === 0) candidates.push('y');
+  if(d[2] === 0) candidates.push('z');
+
+  for(const ax of candidates){
+    const i = axisIndex(ax);
+    if(Math.abs(pa[i] - pb[i]) < 0.01){
+      return { axis: ax, layer: pa[i] };
+    }
+  }
+
+  const ax = candidates[0];
+  return { axis: ax, layer: pa[axisIndex(ax)] };
+}
+
+function doRotation(A, B){
+  const rot  = chooseRotationAxis(A, B);
+  const sign = rotationSign(rot.axis, A, B);
+  queueMove(rot.axis, rot.layer, sign * Math.PI / 2, 260);
+}
+
+function rotationSign(axis, A, B){
+  const pa = A.cubie.pos;
+  const pb = B.cubie.pos;
+  let cross;
+  if(axis === 'x'){
+    cross = pa[1]*pb[2] - pa[2]*pb[1];
+  }else if(axis === 'y'){
+    cross = pa[2]*pb[0] - pa[0]*pb[2];
+  }else{
+    cross = pa[0]*pb[1] - pa[1]*pb[0];
+  }
+  if(cross === 0) return 1;
+  return cross > 0 ? 1 : -1;
+}
+
+/* ==================== 打碎 ==================== */
+function shatter(){
+  if(shattering || animating) return;
+  shattering = true;
+
+  generation++;
+  moveQueue.length = 0;
+  animating = false;
+  clearSelection();
+  cancelLongPress();
+  endSlide();
+
+  const shattered = cubies.slice();
+  if(yaxisEl) yaxisEl.style.display = 'none';
+
+  scene.classList.remove('shake');
+  void scene.offsetWidth;
+  scene.classList.add('shake');
+
+  const t0         = performance.now();
+  const TOTAL      = 2000;
+  const FADE_START = 1300;
+
+  const dynamics = shattered.map(function(){
+    const theta = Math.random() * Math.PI * 2;
+    const phi   = Math.acos(2 * Math.random() - 1);
+    const speed = 0.8 + Math.random() * 1.2;
+
+    const vx = Math.sin(phi) * Math.cos(theta) * speed * 420;
+    const vy = Math.sin(phi) * Math.sin(theta) * speed * 420;
+    const vz = Math.cos(phi) * speed * 420;
+
+    const ax = Math.random() - 0.5;
+    const ay = Math.random() - 0.5;
+    const az = Math.random() - 0.5;
+    const al = Math.sqrt(ax*ax + ay*ay + az*az) || 1;
+
+    return {
+      v: [vx, vy, vz],
+      spinAxis: [ax/al, ay/al, az/al],
+      spinSpeed: (Math.random() - 0.5) * 9,
+      baseRot: null,
+      basePos: null
+    };
+  });
+  for(let i=0;i<shattered.length;i++){
+    dynamics[i].baseRot = shattered[i].rot.slice();
+    dynamics[i].basePos = shattered[i].pos.slice();
+  }
+
+  function frame(now){
+    const elapsed = now - t0;
+    const t = elapsed / TOTAL;
+
+    if(t >= 1){
+      scene.classList.remove('shake');
+      if(yaxisEl) yaxisEl.style.display = '';
+      buildCube(N);
+      shattering = false;
+      return;
+    }
+
+    const dt = elapsed / 1000;
+    const opacity = elapsed > FADE_START
+      ? Math.max(0, 1 - (elapsed - FADE_START) / (TOTAL - FADE_START))
+      : 1;
+
+    for(let i=0;i<shattered.length;i++){
+      const c = shattered[i];
+      const d = dynamics[i];
+
+      const px = d.basePos[0]*SIZE + d.v[0] * dt;
+      const py = d.basePos[1]*SIZE + d.v[1] * dt + 260 * dt * dt;
+      const pz = d.basePos[2]*SIZE + d.v[2] * dt;
+
+      const spinQ = quatFromAxisAngle(d.spinAxis, d.spinSpeed * dt);
+      const spinR = quatToMat3(spinQ);
+      const r = mat3Mul(spinR, d.baseRot);
+
+      c.el.style.opacity = opacity;
+      c.el.style.transform = cssMatrixRaw(r, px, py, pz, cubieScale);
+    }
+
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+}
+
+/* ==================== 按钮 ==================== */
+btnMode.addEventListener('click', function(){
+  if(mode === 'operate'){
+    setMode('browse');
+    /* ★ 关闭操作模式时同步关闭滑动模式 */
+    if(slideMode){
+      slideMode = false;
+      btnSlideMode.classList.remove('on');
+      endSlide();
+    }
+  }else{
+    setMode('operate');
+  }
+});
+
+/* ★ 新增：滑动模式 */
+btnSlideMode.addEventListener('click', async function(){
+  if(slideMode){
+    /* 关闭滑动模式 */
+    slideMode = false;
+    btnSlideMode.classList.remove('on');
+    endSlide();
+    return;
+  }
+
+  /* 打开前弹窗提示 */
+  const ok = await showModal(
+    '滑动模式：按住小贴图左键不放并滑动到另一个小贴图，即可旋转魔方。\n\n' +
+    '· 按住贴纸时视角不会移动，滑动空白区域仍可旋转视角。\n' +
+    '· 可选择不同大贴图面的小贴图。\n' +
+    '· 每次滑动最多选择两个小贴图。'
+  );
+  if(!ok) return;
+
+  slideMode = true;
+  btnSlideMode.classList.add('on');
+  setMode('operate');   /* 滑动模式强制进入操作状态 */
+});
+
+btnScramble.addEventListener('click', function(){
+  if(animating || shattering) return;
+  clearSelection();
+  const axes = ['x','y','z'];
+  for(let i=0;i<20;i++){
+    const ax  = axes[Math.floor(Math.random()*3)];
+    const ly  = Math.floor(Math.random()*N) - (N-1)/2;
+    const dir = Math.random() < 0.5 ? 1 : -1;
+    queueMove(ax, ly, dir * Math.PI/2, 120);
+  }
+});
+
+btnRestore.addEventListener('click', function(){
+  if(shattering) return;
+  generation++;
+  moveQueue.length = 0;
+  animating = false;
+  clearSelection();
+  endSlide();
+  cubies.forEach(function(c){
+    c.pos = c.home.slice();
+    c.rot = IDENTITY.slice();
+    updateCubie(c);
+  });
+});
+
+btnShatter.addEventListener('click', shatter);
+
+/* 应用阶数（使用自定义弹窗） */
+let applyingOrder = false;
+async function applyOrder(){
+  if(applyingOrder) return;
+  let v = parseInt(orderInput.value, 10);
+  if(!Number.isFinite(v)) return;
+
+  if(v < 2) v = 2;
+  if(v > MAX_ORDER) v = MAX_ORDER;
+  orderInput.value = v;
+
+  if(v > WARN_ORDER){
+    applyingOrder = true;
+    const ok = await showModal('确保你的浏览器性能最佳');
+    applyingOrder = false;
+    if(!ok){ orderInput.value = N; return; }
+  }
+
+  generation++;
+  moveQueue.length = 0;
+  animating = false;
+  clearSelection();
+  endSlide();
+
+  buildCube(v);
+}
+
+btnOrderApply.addEventListener('click', applyOrder);
+orderInput.addEventListener('keydown', function(e){
+  if(e.key === 'Enter') applyOrder();
+});
+
+/* ==================== 启动 ==================== */
+buildCube(3);
+
+q = quatMul(
+  quatFromAxisAngle([0,1,0], -30 * Math.PI/180),
+  quatFromAxisAngle([1,0,0], -18 * Math.PI/180)
+);
+applyTransform();
+
+})();
+</script>
+</body>
+</html>
