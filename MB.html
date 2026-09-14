@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+<title>墓碑 · 立坤 / 检采</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; width: 100%; height: 100%;
+    overflow: hidden; background: #05060a;
+  }
+  canvas { display: block; touch-action: none; }
+  #hint {
+    position: fixed; left: 50%; bottom: 16px; transform: translateX(-50%);
+    color: #9fb2cc; opacity: .5; pointer-events: none; white-space: nowrap;
+    font: 12px/1.6 -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+    letter-spacing: 1px;
+  }
+</style>
+</head>
+<body>
+<div id="hint">拖动旋转 · 滚轮/双指缩放 · 右键/双指平移</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+    "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+/* =========================================================
+   0. 基础：渲染器 / 场景 / 相机 / 控制器
+   ========================================================= */
+const renderer = new THREE.WebGLRenderer({ antialias: true, powerPreference: 'high-performance' });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(window.innerWidth, window.innerHeight);
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.15;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x05060a);
+scene.fog = new THREE.FogExp2(0x060810, 0.028);
+
+const camera = new THREE.PerspectiveCamera(55, window.innerWidth / window.innerHeight, 0.1, 400);
+camera.position.set(0.0, 3.8, 10.2);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 1.6, 1.9);
+controls.enableDamping = true;
+controls.dampingFactor = 0.06;
+controls.rotateSpeed = 0.85;
+controls.zoomSpeed = 0.9;
+controls.panSpeed = 0.7;
+controls.minDistance = 2.2;
+controls.maxDistance = 40;
+controls.maxPolarAngle = Math.PI * 0.495;
+controls.screenSpacePanning = true;
+controls.update();
+
+/* =========================================================
+   1. Canvas 程序化纹理工具
+   ========================================================= */
+
+/** 石材细纹理：底色 + 颗粒噪点 + 污渍 + 裂纹 */
+function makeStoneTexture() {
+  const S = 512;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = S;
+  const ctx = cv.getContext('2d');
+
+  ctx.fillStyle = '#77776f';
+  ctx.fillRect(0, 0, S, S);
+
+  // —— 逐像素颗粒噪点 ——
+  const img = ctx.getImageData(0, 0, S, S);
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const n = (Math.random() - 0.5) * 62;
+    d[i]     = Math.max(0, Math.min(255, d[i]     + n));
+    d[i + 1] = Math.max(0, Math.min(255, d[i + 1] + n));
+    d[i + 2] = Math.max(0, Math.min(255, d[i + 2] + n * 0.9));
+  }
+  ctx.putImageData(img, 0, 0);
+
+  // —— 污渍斑块 ——
+  for (let i = 0; i < 220; i++) {
+    const x = Math.random() * S, y = Math.random() * S, r = 6 + Math.random() * 48;
+    const dark = Math.random() > 0.42;
+    const a = 0.04 + Math.random() * 0.13;
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, dark ? `rgba(28,28,26,${a})` : `rgba(214,214,204,${a * 0.55})`);
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(x - r, y - r, r * 2, r * 2);
+  }
+
+  // —— 细裂纹 ——
+  for (let i = 0; i < 26; i++) {
+    let x = Math.random() * S, y = Math.random() * S;
+    ctx.beginPath();
+    ctx.moveTo(x, y);
+    const seg = 4 + Math.floor(Math.random() * 6);
+    for (let j = 0; j < seg; j++) {
+      x += (Math.random() - 0.5) * 62;
+      y += (Math.random() - 0.5) * 62;
+      ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = `rgba(18,18,16,${0.08 + Math.random() * 0.22})`;
+    ctx.lineWidth = 0.6 + Math.random() * 1.4;
+    ctx.stroke();
+  }
+
+  const tex = new THREE.CanvasTexture(cv);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  return tex;
+}
+
+/** 木材质感：底色 + 年轮波纹 + 木结 */
+function makeWoodTexture() {
+  const W = 512, H = 512;
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const ctx = cv.getContext('2d');
+
+  ctx.fillStyle = '#4a2f1c';
+  ctx.fillRect(0, 0, W, H);
+
+  // 木纹条纹
+  for (let i = 0; i < 170; i++) {
+    const x = Math.random() * W;
+    ctx.beginPath();
+    ctx.moveTo(x, -20);
+    for (let y = -20; y <= H + 20; y += 16) {
+      ctx.lineTo(x + Math.sin(y * 0.022 + i) * 7 + (Math.random() - 0.5) * 2.5, y);
+    }
+    ctx.strokeStyle = `rgba(${18 + (Math.random() * 42) | 0},${8 + (Math.random() * 22) | 0},0,${0.06 + Math.random() * 0.24})`;
+    ctx.lineWidth = 0.8 + Math.random() * 3;
+    ctx.stroke();
+  }
+
+  // 木结
+  for (let i = 0; i < 9; i++) {
+    const x = Math.random() * W, y = Math.random() * H, r = 6 + Math.random() * 18;
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, 'rgba(24,12,4,0.85)');
+    g.addColorStop(0.55, 'rgba(64,38,18,0.45)');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  // 颗粒
+  const img = ctx.getImageData(0, 0, W, H);
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const n = (Math.random() - 0.5) * 26;
+    d[i] += n; d[i + 1] += n * 0.7; d[i + 2] += n * 0.5;
+  }
+  ctx.putImageData(img, 0, 0);
+
+  const tex = new THREE.CanvasTexture(cv);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  return tex;
+}
+
+/** 地面泥土纹理 */
+function makeGroundTexture() {
+  const S = 512;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = S;
+  const ctx = cv.getContext('2d');
+  ctx.fillStyle = '#2a2b28';
+  ctx.fillRect(0, 0, S, S);
+
+  for (let i = 0; i < 700; i++) {
+    const x = Math.random() * S, y = Math.random() * S, r = 2 + Math.random() * 26;
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    const light = Math.random() > 0.5;
+    g.addColorStop(0, light ? 'rgba(90,88,80,0.16)' : 'rgba(8,8,8,0.28)');
+    g.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(x - r, y - r, r * 2, r * 2);
+  }
+
+  const img = ctx.getImageData(0, 0, S, S);
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const n = (Math.random() - 0.5) * 36;
+    d[i] += n; d[i + 1] += n; d[i + 2] += n;
+  }
+  ctx.putImageData(img, 0, 0);
+
+  const tex = new THREE.CanvasTexture(cv);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+/** 圆形柔光贴图（用于粒子与雾气） */
+function makeGlowTexture(soft = 0.18) {
+  const S = 128;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = S;
+  const ctx = cv.getContext('2d');
+  const g = ctx.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+  g.addColorStop(0, `rgba(255,255,255,${soft * 6})`);
+  g.addColorStop(0.28, `rgba(255,255,255,${soft * 2.2})`);
+  g.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, S, S);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+/** 雾团贴图：多个模糊斑叠加，更像流动的空气 */
+function makeMistTexture() {
+  const S = 256;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = S;
+  const ctx = cv.getContext('2d');
+  ctx.globalCompositeOperation = 'lighter';
+
+  for (let i = 0; i < 26; i++) {
+    const x = S / 2 + (Math.random() - 0.5) * S * 0.55;
+    const y = S / 2 + (Math.random() - 0.5) * S * 0.55;
+    const r = S * 0.08 + Math.random() * S * 0.26;
+    const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+    g.addColorStop(0, 'rgba(255,255,255,0.055)');
+    g.addColorStop(1, 'rgba(255,255,255,0)');
+    ctx.fillStyle = g;
+    ctx.fillRect(0, 0, S, S);
+  }
+
+  // 外圈柔和衰减，避免出现方形边界
+  const g2 = ctx.createRadialGradient(S / 2, S / 2, 0, S / 2, S / 2, S / 2);
+  g2.addColorStop(0, 'rgba(255,255,255,0.30)');
+  g2.addColorStop(0.45, 'rgba(255,255,255,0.12)');
+  g2.addColorStop(1, 'rgba(255,255,255,0)');
+  ctx.fillStyle = g2;
+  ctx.fillRect(0, 0, S, S);
+
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+/**
+ * 墓志铭贴图：竖排、从右到左
+ */
+function makeEpitaphTexture(text, perCol = 15) {
+  const chars = Array.from(text);
+  const cols = [];
+  for (let i = 0; i < chars.length; i += perCol) cols.push(chars.slice(i, i + perCol));
+
+  const FONT = 100, CELL_W = 126, CELL_H = 116, PAD_X = 84, PAD_Y = 76;
+  const W = cols.length * CELL_W + PAD_X * 2;
+  const H = perCol * CELL_H + PAD_Y * 2;
+
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const ctx = cv.getContext('2d');
+
+  ctx.font = `bold ${FONT}px "STKaiti","KaiTi","Kaiti SC","Songti SC","SimSun",serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  cols.forEach((col, ci) => {
+    // 从右到左：第一列在最右侧
+    const cx = W - PAD_X - CELL_W / 2 - ci * CELL_W;
+    col.forEach((ch, ri) => {
+      const cy = PAD_Y + CELL_H / 2 + ri * CELL_H;
+      // 凹陷阴影
+      ctx.fillStyle = 'rgba(0,0,0,0.80)';
+      ctx.fillText(ch, cx + 3, cy + 4);
+      // 高光字身
+      ctx.fillStyle = 'rgba(246,240,220,0.96)';
+      ctx.fillText(ch, cx, cy);
+      // 轻微描边强化石刻感
+      ctx.strokeStyle = 'rgba(30,30,26,0.35)';
+      ctx.lineWidth = 1.2;
+      ctx.strokeText(ch, cx, cy);
+    });
+  });
+
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  return tex;
+}
+
+/* =========================================================
+   2. 灯光
+   ========================================================= */
+scene.add(new THREE.HemisphereLight(0x334a72, 0x090a0c, 0.75));
+
+const moon = new THREE.DirectionalLight(0xbcd2ff, 2.0);
+moon.position.set(-7, 13, 7);
+moon.castShadow = true;
+moon.shadow.mapSize.set(1024, 1024);
+moon.shadow.camera.left = -14;
+moon.shadow.camera.right = 14;
+moon.shadow.camera.top = 14;
+moon.shadow.camera.bottom = -6;
+moon.shadow.camera.near = 1;
+moon.shadow.camera.far = 50;
+moon.shadow.bias = -0.0006;
+scene.add(moon);
+
+// 墓碑后方的冷色轮廓光
+const rim = new THREE.PointLight(0x5577ff, 14, 24, 2);
+rim.position.set(-3.2, 3.2, -3.2);
+scene.add(rim);
+
+// 前方的暖色补光
+const fill = new THREE.PointLight(0xff8a3c, 10, 20, 2);
+fill.position.set(2.8, 1.6, 5.2);
+scene.add(fill);
+
+/* =========================================================
+   3. 地面
+   ========================================================= */
+const groundTex = makeGroundTexture();
+groundTex.repeat.set(16, 16);
+const ground = new THREE.Mesh(
+  new THREE.PlaneGeometry(120, 120),
+  new THREE.MeshStandardMaterial({ map: groundTex, color: 0x54544c, roughness: 1, metalness: 0 })
+);
+ground.rotation.x = -Math.PI / 2;
+ground.receiveShadow = true;
+scene.add(ground);
+
+/* =========================================================
+   4. 共享材质（石碑与木材）
+   ========================================================= */
+const stoneTex = makeStoneTexture();
+const stoneBump = stoneTex.clone();
+stoneBump.needsUpdate = true;
+
+const stoneMat = new THREE.MeshStandardMaterial({
+  map: stoneTex,
+  bumpMap: stoneBump,
+  bumpScale: 0.035,
+  color: 0xa8a89f,
+  roughness: 0.96,
+  metalness: 0.03
+});
+
+const woodTex = makeWoodTexture();
+woodTex.repeat.set(1.6, 1.6);
+const woodMat = new THREE.MeshStandardMaterial({
+  map: woodTex,
+  bumpMap: woodTex,
+  bumpScale: 0.02,
+  color: 0x8a6a4a,
+  roughness: 0.85,
+  metalness: 0.02
+});
+
+/* =========================================================
+   5. 单组“墓碑 + 棺材”构建函数
+   ========================================================= */
+function createGraveSet(epitaphText, offsetX, offsetZ, rotY) {
+  const root = new THREE.Group();
+  root.position.set(offsetX, 0, offsetZ);
+  root.rotation.y = rotY;
+  scene.add(root);
+
+  /* ---------- 墓碑 ---------- */
+  const grave = new THREE.Group();
+  grave.rotation.y = 0.06;
+  root.add(grave);
+
+  // 底座
+  const base = new THREE.Mesh(new THREE.BoxGeometry(2.35, 0.36, 0.86), stoneMat);
+  base.position.set(0, 0.18, 0);
+  base.castShadow = true;
+  base.receiveShadow = true;
+  grave.add(base);
+
+  // 碑身
+  const slabH = 3.0, slabW = 1.7, slabD = 0.4;
+  const slab = new THREE.Mesh(new THREE.BoxGeometry(slabW, slabH, slabD), stoneMat);
+  slab.position.set(0, 0.36 + slabH / 2, 0);
+  slab.castShadow = true;
+  slab.receiveShadow = true;
+  grave.add(slab);
+
+  // 碑顶压条
+  const cap = new THREE.Mesh(new THREE.BoxGeometry(1.94, 0.2, 0.54), stoneMat);
+  cap.position.set(0, 0.36 + slabH + 0.1, 0);
+  cap.castShadow = true;
+  grave.add(cap);
+
+  // 墓志铭平面（竖排 从右到左）
+  const epitaphTex = makeEpitaphTexture(epitaphText, 15);
+  const planeH = 2.42;
+  const planeW = planeH * (epitaphTex.image.width / epitaphTex.image.height);
+
+  const epitaphMesh = new THREE.Mesh(
+    new THREE.PlaneGeometry(planeW, planeH),
+    new THREE.MeshBasicMaterial({
+      map: epitaphTex,
+      transparent: true,
+      depthWrite: false,
+      toneMapped: false,
+      opacity: 0.98,
+      color: 0xcfc9b0
+    })
+  );
+  epitaphMesh.position.set(0, 0.36 + slabH / 2 + 0.06, slabD / 2 + 0.014);
+  epitaphMesh.renderOrder = 1;
+  grave.add(epitaphMesh);
+
+  /* ---------- 木质棺材（无上方线条，顶面水平统一） ---------- */
+  const coffinShape = new THREE.Shape();
+  coffinShape.moveTo(0.52, 1.78);
+  coffinShape.lineTo(0.96, 1.15);
+  coffinShape.lineTo(0.73, -1.78);
+  coffinShape.lineTo(-0.73, -1.78);
+  coffinShape.lineTo(-0.96, 1.15);
+  coffinShape.lineTo(-0.52, 1.78);
+  coffinShape.closePath();
+
+  const coffinGeo = new THREE.ExtrudeGeometry(coffinShape, {
+    depth: 0.88,
+    bevelEnabled: true,
+    bevelSize: 0.045,
+    bevelThickness: 0.045,
+    bevelSegments: 2,
+    curveSegments: 1
+  });
+
+  // 在几何层面完成旋转：先放平，再绕世界 Y 轴偏转
+  // 这样顶面严格保持水平，高度面完全统一
+  coffinGeo.rotateX(-Math.PI / 2);
+  coffinGeo.rotateY(0.09);
+
+  // 让棺材底面精确贴地，顶面高度统一
+  coffinGeo.computeBoundingBox();
+  coffinGeo.translate(0, -coffinGeo.boundingBox.min.y, 0);
+
+  const coffin = new THREE.Mesh(coffinGeo, woodMat);
+  coffin.position.set(0.1, 0.0, 2.9);
+  coffin.castShadow = true;
+  coffin.receiveShadow = true;
+  root.add(coffin);
+
+  return root;
+}
+
+/* =========================================================
+   6. 两组墓碑 + 棺材（并排）
+   ========================================================= */
+const EPITAPH_1 =
+  '立坤，一种奇怪的生物。喜欢骂人和打人吸烟，经常居住在厕所的粪坑里，如果有人和他对视，那么有极大概率直接发起攻击或者口to芬芳。危险等级☆☆☆☆☆';
+
+const EPITAPH_2 =
+  '检采，一种极度危险的生物！你看到他的那一刻就会反感，他的样子会让正常人产生生理不适！遇到他你会立刻被攻击，没有理由。厕所的阴暗角落是他的居住地。';
+
+// 并排放置：左组与右组
+createGraveSet(EPITAPH_1, -2.15, 0, 0);
+createGraveSet(EPITAPH_2,  2.15, 0, 0);
+
+/* =========================================================
+   7. 粒子系统（漂浮尘埃）
+   ========================================================= */
+const DUST_COUNT = 1300;
+const RANGE_XZ = 32, RANGE_Y = 14;
+
+const dustPos = new Float32Array(DUST_COUNT * 3);
+const dustPhase = new Float32Array(DUST_COUNT);
+const dustSpeed = new Float32Array(DUST_COUNT);
+const dustSize = new Float32Array(DUST_COUNT);
+
+for (let i = 0; i < DUST_COUNT; i++) {
+  dustPos[i * 3]     = (Math.random() - 0.5) * RANGE_XZ;
+  dustPos[i * 3 + 1] = Math.random() * RANGE_Y;
+  dustPos[i * 3 + 2] = (Math.random() - 0.5) * RANGE_XZ;
+  dustPhase[i] = Math.random() * Math.PI * 2;
+  dustSpeed[i] = 0.12 + Math.random() * 0.4;
+  dustSize[i]  = 0.5 + Math.random() * 1.2;
+}
+
+const dustGeo = new THREE.BufferGeometry();
+dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPos, 3));
+dustGeo.setAttribute('aSize', new THREE.BufferAttribute(dustSize, 1));
+
+const dustMat = new THREE.PointsMaterial({
+  size: 0.075,
+  map: makeGlowTexture(0.22),
+  color: 0xa9c8ff,
+  transparent: true,
+  opacity: 0.85,
+  depthWrite: false,
+  blending: THREE.AdditiveBlending,
+  sizeAttenuation: true,
+  fog: false
+});
+
+const dust = new THREE.Points(dustGeo, dustMat);
+scene.add(dust);
+
+/* =========================================================
+   8. 空气呼吸效果（体积感雾团）
+   ========================================================= */
+const mistTex = makeMistTexture();
+const mists = [];
+const MIST_COUNT = 16;
+
+for (let i = 0; i < MIST_COUNT; i++) {
+  const mat = new THREE.SpriteMaterial({
+    map: mistTex,
+    color: 0x6d8fc4,
+    transparent: true,
+    opacity: 0.045 + Math.random() * 0.04,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    fog: false
+  });
+  const sp = new THREE.Sprite(mat);
+  const s = 9 + Math.random() * 14;
+  sp.scale.set(s, s, 1);
+  sp.position.set(
+    (Math.random() - 0.5) * 28,
+    0.8 + Math.random() * 8,
+    (Math.random() - 0.5) * 28
+  );
+  scene.add(sp);
+  mists.push({
+    sp,
+    baseScale: s,
+    baseOpacity: mat.opacity,
+    ph: Math.random() * Math.PI * 2,
+    spd: 0.12 + Math.random() * 0.25,
+    driftX: (Math.random() - 0.5) * 0.35,
+    driftY: 0.05 + Math.random() * 0.12
+  });
+}
+
+/* =========================================================
+   9. 主循环
+   ========================================================= */
+const clock = new THREE.Clock();
+
+function animate() {
+  requestAnimationFrame(animate);
+
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const t = clock.elapsedTime;
+
+  /* --- 尘埃粒子 --- */
+  const pos = dustGeo.attributes.position.array;
+  for (let i = 0; i < DUST_COUNT; i++) {
+    const i3 = i * 3;
+    pos[i3 + 1] += dustSpeed[i] * dt * 0.75;
+    pos[i3]     += Math.sin(t * 0.55 + dustPhase[i]) * dt * 0.18;
+    pos[i3 + 2] += Math.cos(t * 0.48 + dustPhase[i]) * dt * 0.18;
+
+    if (pos[i3 + 1] > RANGE_Y) {
+      pos[i3 + 1] = 0;
+      pos[i3]     = (Math.random() - 0.5) * RANGE_XZ;
+      pos[i3 + 2] = (Math.random() - 0.5) * RANGE_XZ;
+    }
+  }
+  dustGeo.attributes.position.needsUpdate = true;
+
+  /* --- 空气呼吸（雾团漂浮 + 缩放脉动）--- */
+  for (let i = 0; i < mists.length; i++) {
+    const m = mists[i];
+    m.sp.position.x += m.driftX * dt;
+    m.sp.position.y += m.driftY * dt;
+
+    if (m.sp.position.y > 11) m.sp.position.y = 0.4;
+    if (m.sp.position.x > 16) m.sp.position.x = -16;
+    if (m.sp.position.x < -16) m.sp.position.x = 16;
+
+    // 呼吸式缩放与透明度起伏
+    const breathe = 1 + Math.sin(t * m.spd + m.ph) * 0.09;
+    m.sp.scale.set(m.baseScale * breathe, m.baseScale * breathe * 0.78, 1);
+    m.sp.material.opacity = m.baseOpacity * (0.72 + 0.28 * Math.sin(t * m.spd * 1.4 + m.ph));
+  }
+
+  /* --- 整体氛围微弱呼吸（雾密度）--- */
+  scene.fog.density = 0.028 + Math.sin(t * 0.35) * 0.0022;
+
+  /* --- 灯光轻微摇曳 --- */
+  fill.intensity = 10 + Math.sin(t * 2.3) * 1.6;
+  rim.intensity  = 14 + Math.sin(t * 1.1 + 1.7) * 2.2;
+
+  controls.update();
+  renderer.render(scene, camera);
+}
+animate();
+
+/* =========================================================
+   10. 自适应
+   ========================================================= */
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// 移动端阻止双指缩放页面
+document.addEventListener('gesturestart', e => e.preventDefault());
+</script>
+</body>
+</html>
